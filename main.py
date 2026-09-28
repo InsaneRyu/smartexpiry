@@ -303,7 +303,7 @@ class SmartExpiryApp(App):
             return
 
         contenido.add_widget(camara)
-        estado_txt = Label(text="Apunta al código de barras...", size_hint_y=None, height=dp(30))
+        estado_txt = Label(text="Preparando cámara...", size_hint_y=None, height=dp(30))
         contenido.add_widget(estado_txt)
         contenido.add_widget(self._fila_botones(
             ("Cancelar", lambda *_: cerrar())))
@@ -312,8 +312,14 @@ class SmartExpiryApp(App):
                       size_hint=(0.95, None), height=dp(480), auto_dismiss=False)
 
         tarea = None
+        fotogramas_a_descartar = [6]  # ignora los primeros, pueden venir de la sesión anterior
 
         def intentar_leer(dt):
+            if fotogramas_a_descartar[0] > 0:
+                fotogramas_a_descartar[0] -= 1
+                if fotogramas_a_descartar[0] == 0:
+                    estado_txt.text = "Apunta al código de barras..."
+                return
             textura = camara.texture
             if textura is None:
                 return
@@ -334,9 +340,10 @@ class SmartExpiryApp(App):
             if tarea:
                 tarea.cancel()
             camara.play = False
+            contenido.remove_widget(camara)
             popup.dismiss()
 
-        tarea = Clock.schedule_interval(intentar_leer, 0.5)
+        tarea = Clock.schedule_interval(intentar_leer, 0.3)
         popup.open()
 
     def _mostrar_aviso(self, texto):
