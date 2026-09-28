@@ -19,7 +19,7 @@ from kivy.uix.popup import Popup
 from kivy.uix.textinput import TextInput
 from kivy.utils import escape_markup
 
-Window.softinput_mode = "pan"  # evita que el teclado tape los campos
+Window.softinput_mode = "below_target" # evita que el teclado tape los campos
 
 DIAS_ALERTA = 7
 
