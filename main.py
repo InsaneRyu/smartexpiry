@@ -8,18 +8,29 @@ import time
 from datetime import date, timedelta
 
 from kivy.app import App
+from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.lang import Builder
 from kivy.metrics import dp
 from kivy.properties import StringProperty
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
+from kivy.uix.camera import Camera
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.textinput import TextInput
-from kivy.utils import escape_markup
+from kivy.utils import escape_markup, platform
 
-Window.softinput_mode = "below_target" # evita que el teclado tape los campos
+from PIL import Image as PILImage
+from pyzbar.pyzbar import decode as zbar_decode
+
+Window.softinput_mode = "below_target"  # mantiene visible el campo donde escribes
+
+# En Android hay que pedir permiso de cámara en tiempo de ejecución.
+if platform == "android":
+    from android.permissions import Permission, check_permission, request_permissions
+else:
+    Permission = check_permission = request_permissions = None
 
 DIAS_ALERTA = 7
 
@@ -184,12 +195,42 @@ class SmartExpiryApp(App):
         contenido.add_widget(msg)
         return msg
 
-    # ----- Escaneo simulado (Paso 1 del blueprint) -----
+    # ----- Punto de entrada: elegir cámara o escritura manual -----
 
     def abrir_escaneo(self, modo):
+        contenido = BoxLayout(orientation="vertical", spacing=dp(10), padding=dp(10))
+        contenido.add_widget(Label(text="Elige cómo quieres registrar el código",
+                                   size_hint_y=None, height=dp(30)))
+
+        def usar_camara(*_):
+            popup.dismiss()
+            self.abrir_camara(modo)
+
+        def usar_manual(*_):
+            popup.dismiss()
+            self.abrir_manual(modo)
+
+        contenido.add_widget(self._fila_botones(
+            ("Cámara", usar_camara),
+            ("Escribir a mano", usar_manual)))
+        contenido.add_widget(self._fila_botones(
+            ("Cancelar", lambda *_: popup.dismiss()),))
+        popup = Popup(title="Registrar producto", content=contenido,
+                      size_hint=(0.85, None), height=dp(220), auto_dismiss=False)
+        popup.open()
+
+    def _procesar_codigo(self, upc, modo):
+        """Con el UPC ya leído (por cámara o a mano), sigue el flujo del blueprint."""
+        if modo == "filtro":
+            self.root.ids.buscar.text = upc
+        else:
+            self.abrir_lote(upc, es_nuevo=upc not in self.db["catalogo"])
+
+    # ----- Escritura manual (respaldo si la cámara falla o no hay una) -----
+
+    def abrir_manual(self, modo):
         contenido = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
-        campo = self._campo(contenido, "Escribe el UPC (la cámara real llega en la Fase 3)",
-                            solo_numeros=True)
+        campo = self._campo(contenido, "Escribe el código UPC", solo_numeros=True)
         contenido.add_widget(Label())  # espacio flexible
 
         def aceptar(*_):
@@ -197,17 +238,83 @@ class SmartExpiryApp(App):
             if not upc:
                 return
             popup.dismiss()
-            if modo == "filtro":
-                self.root.ids.buscar.text = upc   # filtra la lista por ese UPC
-            else:
-                self.abrir_lote(upc, es_nuevo=upc not in self.db["catalogo"])
+            self._procesar_codigo(upc, modo)
 
         contenido.add_widget(self._fila_botones(
             ("Cancelar", lambda *_: popup.dismiss()),
             ("Aceptar", aceptar)))
-        popup = Popup(title="Escanear producto", content=contenido,
+        popup = Popup(title="Escribir código", content=contenido,
                       size_hint=(0.9, None), height=dp(260), auto_dismiss=False)
         popup.open()
+
+    # ----- Escaneo real con la cámara -----
+
+    def abrir_camara(self, modo):
+        if platform == "android" and check_permission is not None:
+            if not check_permission(Permission.CAMERA):
+                request_permissions([Permission.CAMERA])
+                self._mostrar_aviso("Concede el permiso de cámara y vuelve a intentar.")
+                return
+
+        contenido = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
+        try:
+            camara = Camera(play=True, resolution=(640, 480))
+        except Exception:
+            contenido.add_widget(Label(
+                text="No se pudo abrir la cámara en este dispositivo.\n"
+                     "Usa la opción de escribir a mano."))
+            contenido.add_widget(self._fila_botones(
+                ("Cerrar", lambda *_: popup.dismiss())))
+            popup = Popup(title="Cámara no disponible", content=contenido,
+                          size_hint=(0.9, None), height=dp(220), auto_dismiss=False)
+            popup.open()
+            return
+
+        contenido.add_widget(camara)
+        estado_txt = Label(text="Apunta al código de barras...", size_hint_y=None, height=dp(30))
+        contenido.add_widget(estado_txt)
+        contenido.add_widget(self._fila_botones(
+            ("Cancelar", lambda *_: cerrar())))
+
+        popup = Popup(title="Escaneando", content=contenido,
+                      size_hint=(0.95, None), height=dp(480), auto_dismiss=False)
+
+        tarea = None
+
+        def intentar_leer(dt):
+            textura = camara.texture
+            if textura is None:
+                return
+            try:
+                ancho, alto = textura.size
+                datos = textura.pixels
+                imagen = PILImage.frombytes("RGBA", (ancho, alto), datos).convert("L")
+                resultados = zbar_decode(imagen)
+            except Exception:
+                return
+            if resultados:
+                codigo = resultados[0].data.decode("utf-8", errors="ignore").strip()
+                if codigo:
+                    cerrar()
+                    self._procesar_codigo(codigo, modo)
+
+        def cerrar(*_):
+            if tarea:
+                tarea.cancel()
+            camara.play = False
+            popup.dismiss()
+
+        tarea = Clock.schedule_interval(intentar_leer, 0.5)
+        popup.open()
+
+    def _mostrar_aviso(self, texto):
+        contenido = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
+        contenido.add_widget(Label(text=texto))
+        contenido.add_widget(self._fila_botones(
+            ("Entendido", lambda *_: aviso.dismiss())))
+        aviso = Popup(title="Aviso", content=contenido,
+                     size_hint=(0.85, None), height=dp(200), auto_dismiss=False)
+        aviso.open()
 
     # ----- Registrar lote (Pasos 4 y 5 del blueprint) -----
 
