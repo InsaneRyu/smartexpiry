@@ -5,7 +5,8 @@ package.domain = org.smartexpiry
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,json
 version = 0.1
-requirements = python3,kivy
+requirements = python3==3.11.5,hostpython3==3.11.5,kivy==2.3.0
+p4a.branch = v2024.01.21
 orientation = portrait, landscape
 fullscreen = 0
 
