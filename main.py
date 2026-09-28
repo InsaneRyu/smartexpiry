@@ -15,14 +15,10 @@ from kivy.metrics import dp
 from kivy.properties import StringProperty
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
-from kivy.uix.camera import Camera
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.textinput import TextInput
 from kivy.utils import escape_markup, platform
-
-from PIL import Image as PILImage
-from pyzbar.pyzbar import decode as zbar_decode
 
 Window.softinput_mode = "below_target"  # mantiene visible el campo donde escribes
 
@@ -31,6 +27,35 @@ if platform == "android":
     from android.permissions import Permission, check_permission, request_permissions
 else:
     Permission = check_permission = request_permissions = None
+
+# Todo lo relacionado a cámara/escaneo se carga con cuidado: si algo falla
+# (muy común la primera vez en Android), la app sigue abriendo con el
+# registro manual disponible, en vez de cerrarse de golpe.
+CAMARA_DISPONIBLE = True
+_error_camara = ""
+
+try:
+    if platform == "android":
+        # ctypes no siempre encuentra libzbar.so por sí solo en Android;
+        # la precargamos desde la carpeta de librerías nativas de la app.
+        import ctypes
+        from jnius import autoclass
+        _actividad = autoclass("org.kivy.android.PythonActivity").mActivity
+        _carpeta_libs = _actividad.getApplicationInfo().nativeLibraryDir
+        try:
+            ctypes.CDLL(os.path.join(_carpeta_libs, "libzbar.so"))
+        except OSError:
+            pass  # si esto falla, dejamos que pyzbar lo intente por su cuenta
+
+    from pyzbar.pyzbar import decode as zbar_decode
+    from PIL import Image as PILImage
+    from kivy.uix.camera import Camera
+except Exception as _e:
+    CAMARA_DISPONIBLE = False
+    _error_camara = str(_e)
+    zbar_decode = None
+    PILImage = None
+    Camera = None
 
 DIAS_ALERTA = 7
 
@@ -250,6 +275,13 @@ class SmartExpiryApp(App):
     # ----- Escaneo real con la cámara -----
 
     def abrir_camara(self, modo):
+        if not CAMARA_DISPONIBLE:
+            self._mostrar_aviso(
+                "El escaneo con cámara no está disponible en esta compilación.\n"
+                "Usa 'Escribir a mano' mientras lo ajustamos.\n\n"
+                f"Detalle técnico: {_error_camara[:120]}")
+            return
+
         if platform == "android" and check_permission is not None:
             if not check_permission(Permission.CAMERA):
                 request_permissions([Permission.CAMERA])
