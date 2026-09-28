@@ -17,7 +17,9 @@ from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
+from kivy.uix.scatter import Scatter
 from kivy.uix.textinput import TextInput
+from kivy.uix.widget import Widget
 from kivy.utils import escape_markup, platform
 
 Window.softinput_mode = "below_target"  # mantiene visible el campo donde escribes
@@ -165,9 +167,11 @@ class SmartExpiryApp(App):
 
     def cargar_db(self):
         if not os.path.exists(self.archivo):
-            return {"catalogo": {}, "inventario": []}
+            return {"catalogo": {}, "inventario": [], "config": {"rotacion_camara": 0}}
         with open(self.archivo, "r", encoding="utf-8") as f:
-            return json.load(f)
+            datos = json.load(f)
+        datos.setdefault("config", {}).setdefault("rotacion_camara", 0)
+        return datos
 
     def guardar_db(self):
         with open(self.archivo, "w", encoding="utf-8") as f:
@@ -302,14 +306,35 @@ class SmartExpiryApp(App):
             popup.open()
             return
 
-        contenido.add_widget(camara)
+        contenedor = Scatter(do_rotation=False, do_scale=False, do_translation=False,
+                             size_hint=(None, None), size=(dp(320), dp(320)),
+                             pos_hint={"center_x": 0.5})
+        camara.size_hint = (None, None)
+        camara.size = (dp(320), dp(320))
+        contenedor.rotation = self.db["config"]["rotacion_camara"]
+        contenedor.add_widget(camara)
+
+        envoltorio = BoxLayout(size_hint_y=None, height=dp(320))
+        envoltorio.add_widget(Widget())  # centra el visor
+        envoltorio.add_widget(contenedor)
+        envoltorio.add_widget(Widget())
+        contenido.add_widget(envoltorio)
+
         estado_txt = Label(text="Preparando cámara...", size_hint_y=None, height=dp(30))
         contenido.add_widget(estado_txt)
+
+        def girar(*_):
+            nueva = (self.db["config"]["rotacion_camara"] + 90) % 360
+            self.db["config"]["rotacion_camara"] = nueva
+            contenedor.rotation = nueva
+            self.guardar_db()
+
         contenido.add_widget(self._fila_botones(
+            ("Girar imagen ⟳", girar),
             ("Cancelar", lambda *_: cerrar())))
 
         popup = Popup(title="Escaneando", content=contenido,
-                      size_hint=(0.95, None), height=dp(480), auto_dismiss=False)
+                      size_hint=(0.95, None), height=dp(520), auto_dismiss=False)
 
         tarea = None
         fotogramas_a_descartar = [6]  # ignora los primeros, pueden venir de la sesión anterior
@@ -340,7 +365,7 @@ class SmartExpiryApp(App):
             if tarea:
                 tarea.cancel()
             camara.play = False
-            contenido.remove_widget(camara)
+            contenedor.remove_widget(camara)
             popup.dismiss()
 
         tarea = Clock.schedule_interval(intentar_leer, 0.3)
