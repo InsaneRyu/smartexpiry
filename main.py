@@ -59,6 +59,19 @@ except Exception as _e:
     PILImage = None
     Camera = None
 
+def _rotacion_pantalla_actual():
+    """Grados que la pantalla está rotada ahora mismo (0/90/180/270). Solo Android."""
+    if platform != "android":
+        return 0
+    try:
+        from jnius import autoclass
+        actividad = autoclass("org.kivy.android.PythonActivity").mActivity
+        codigo = actividad.getWindowManager().getDefaultDisplay().getRotation()
+        return {0: 0, 1: 90, 2: 180, 3: 270}.get(codigo, 0)
+    except Exception:
+        return 0
+
+
 DIAS_ALERTA = 7
 
 
@@ -167,10 +180,13 @@ class SmartExpiryApp(App):
 
     def cargar_db(self):
         if not os.path.exists(self.archivo):
-            return {"catalogo": {}, "inventario": [], "config": {"rotacion_camara": 0}}
+            return {"catalogo": {}, "inventario": [],
+                    "config": {"rotacion_camara": 0, "rotacion_pantalla_base": 0}}
         with open(self.archivo, "r", encoding="utf-8") as f:
             datos = json.load(f)
-        datos.setdefault("config", {}).setdefault("rotacion_camara", 0)
+        config = datos.setdefault("config", {})
+        config.setdefault("rotacion_camara", 0)
+        config.setdefault("rotacion_pantalla_base", 0)
         return datos
 
     def guardar_db(self):
@@ -276,6 +292,14 @@ class SmartExpiryApp(App):
                       size_hint=(0.9, None), height=dp(260), auto_dismiss=False)
         popup.open()
 
+    def _angulo_camara_actual(self):
+        """Ángulo calibrado, ajustado automáticamente si la tablet
+        está en una posición distinta a cuando se calibró."""
+        config = self.db["config"]
+        pantalla_ahora = _rotacion_pantalla_actual()
+        diferencia = (pantalla_ahora - config["rotacion_pantalla_base"]) % 360
+        return (config["rotacion_camara"] + diferencia) % 360
+
     # ----- Escaneo real con la cámara -----
 
     def abrir_camara(self, modo):
@@ -311,7 +335,7 @@ class SmartExpiryApp(App):
                              pos_hint={"center_x": 0.5})
         camara.size_hint = (None, None)
         camara.size = (dp(320), dp(320))
-        contenedor.rotation = self.db["config"]["rotacion_camara"]
+        contenedor.rotation = self._angulo_camara_actual()
         contenedor.add_widget(camara)
 
         envoltorio = BoxLayout(size_hint_y=None, height=dp(320))
@@ -324,9 +348,10 @@ class SmartExpiryApp(App):
         contenido.add_widget(estado_txt)
 
         def girar(*_):
-            nueva = (self.db["config"]["rotacion_camara"] + 90) % 360
-            self.db["config"]["rotacion_camara"] = nueva
+            nueva = (contenedor.rotation + 90) % 360
             contenedor.rotation = nueva
+            self.db["config"]["rotacion_camara"] = nueva
+            self.db["config"]["rotacion_pantalla_base"] = _rotacion_pantalla_actual()
             self.guardar_db()
 
         contenido.add_widget(self._fila_botones(
