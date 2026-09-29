@@ -39,6 +39,16 @@ jobs:
           path: ~/.android/debug.keystore
           key: smartexpiry-debug-keystore-v1
 
+      - name: Reutilizar el Android SDK/NDK y lo ya compilado antes
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer
+            .buildozer
+          key: buildozer-${{ hashFiles('buildozer.spec') }}
+          restore-keys: |
+            buildozer-
+
       - name: Dar a esta compilación un número de versión único
         run: |
           sed -i "s/^android.numeric_version = .*/android.numeric_version = ${{ github.run_number }}/" buildozer.spec
