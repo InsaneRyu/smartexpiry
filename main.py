@@ -4,7 +4,10 @@
 
 import json
 import os
+import threading
 import time
+import urllib.request
+from calendar import monthrange
 from datetime import date, timedelta
 
 from kivy.app import App
@@ -15,12 +18,19 @@ from kivy.metrics import dp
 from kivy.properties import StringProperty
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
+from kivy.uix.gridlayout import GridLayout
 from kivy.uix.label import Label
 from kivy.uix.popup import Popup
 from kivy.uix.scatter import Scatter
+from kivy.uix.scrollview import ScrollView
+from kivy.uix.spinner import Spinner
 from kivy.uix.textinput import TextInput
 from kivy.uix.widget import Widget
 from kivy.utils import escape_markup, platform
+
+UNIDADES = ["Unidad", "Litro", "Mililitro (ml)", "Onza (oz)", "Paquete", "Caja"]
+NOMBRES_MES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+               "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
 
 Window.softinput_mode = "below_target"  # mantiene visible el campo donde escribes
 
@@ -203,6 +213,9 @@ class SmartExpiryApp(App):
             producto = self.db["catalogo"].get(lote["codigo_upc"], {})
             nombre = escape_markup(producto.get("nombre", "Sin nombre"))
             detalle = escape_markup(producto.get("descripcion", ""))
+            unidad = producto.get("unidad", "")
+            if unidad and unidad != "Unidad":
+                detalle = f"{detalle} · {escape_markup(unidad)}" if detalle else escape_markup(unidad)
             texto_estado, color = estado(dias_para_vencer(lote["fecha_vencimiento"]))
             datos.append({
                 "text": (f"[b]{nombre}[/b] {detalle}\n"
@@ -268,8 +281,57 @@ class SmartExpiryApp(App):
         """Con el UPC ya leído (por cámara o a mano), sigue el flujo del blueprint."""
         if modo == "filtro":
             self.root.ids.buscar.text = upc
-        else:
-            self.abrir_lote(upc, es_nuevo=upc not in self.db["catalogo"])
+            return
+        if upc in self.db["catalogo"]:
+            self.abrir_lote(upc, es_nuevo=False)
+            return
+        # Producto nuevo: primero probamos Open Food Facts (Paso 3 del blueprint)
+        self._mostrar_buscando()
+
+        def al_terminar(nombre, cantidad_texto):
+            self._cerrar_buscando()
+            self.abrir_lote(upc, es_nuevo=True, prellenado={
+                "nombre": nombre or "",
+                "descripcion": cantidad_texto or "",
+                "encontrado": bool(nombre),
+            })
+
+        self._consultar_openfoodfacts(upc, al_terminar)
+
+    def _consultar_openfoodfacts(self, upc, on_listo):
+        """Busca el producto en Open Food Facts en un hilo aparte para no
+        congelar la pantalla mientras responde. Siempre llama a on_listo,
+        haya encontrado algo o no."""
+        def tarea():
+            nombre = None
+            cantidad_texto = ""
+            try:
+                url = f"https://world.openfoodfacts.org/api/v2/product/{upc}.json"
+                with urllib.request.urlopen(url, timeout=6) as resp:
+                    datos = json.loads(resp.read().decode("utf-8"))
+                if datos.get("status") == 1:
+                    producto = datos.get("product", {})
+                    nombre = (producto.get("product_name_es")
+                              or producto.get("product_name") or None)
+                    cantidad_texto = producto.get("quantity", "") or ""
+            except Exception:
+                nombre = None
+            Clock.schedule_once(lambda dt: on_listo(nombre, cantidad_texto), 0)
+
+        threading.Thread(target=tarea, daemon=True).start()
+
+    def _mostrar_buscando(self):
+        contenido = BoxLayout(orientation="vertical", padding=dp(20))
+        contenido.add_widget(Label(text="Buscando en Open Food Facts..."))
+        self._popup_buscando = Popup(title="Un momento", content=contenido,
+                                     size_hint=(0.8, None), height=dp(140),
+                                     auto_dismiss=False)
+        self._popup_buscando.open()
+
+    def _cerrar_buscando(self):
+        if getattr(self, "_popup_buscando", None):
+            self._popup_buscando.dismiss()
+            self._popup_buscando = None
 
     # ----- Escritura manual (respaldo si la cámara falla o no hay una) -----
 
@@ -405,19 +467,108 @@ class SmartExpiryApp(App):
                      size_hint=(0.85, None), height=dp(200), auto_dismiss=False)
         aviso.open()
 
+    # ----- Calendario para elegir fechas -----
+
+    def abrir_calendario(self, fecha_inicial_iso, al_elegir):
+        try:
+            base = date.fromisoformat(fecha_inicial_iso)
+        except Exception:
+            base = date.today()
+        estado_mes = {"anio": base.year, "mes": base.month}
+
+        contenido = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(10))
+        cabecera = BoxLayout(size_hint_y=None, height=dp(40))
+        btn_prev = Button(text="◀", size_hint_x=None, width=dp(44))
+        lbl_mes = Label(text="")
+        btn_next = Button(text="▶", size_hint_x=None, width=dp(44))
+        cabecera.add_widget(btn_prev)
+        cabecera.add_widget(lbl_mes)
+        cabecera.add_widget(btn_next)
+        contenido.add_widget(cabecera)
+
+        grilla = GridLayout(cols=7, size_hint_y=None, height=dp(260), spacing=dp(2))
+        contenido.add_widget(grilla)
+
+        def pintar():
+            lbl_mes.text = f"{NOMBRES_MES[estado_mes['mes'] - 1].capitalize()} {estado_mes['anio']}"
+            grilla.clear_widgets()
+            for inicial in ["L", "M", "M", "J", "V", "S", "D"]:
+                grilla.add_widget(Label(text=inicial, size_hint_y=None, height=dp(34)))
+            primer_dia, dias_en_mes = monthrange(estado_mes["anio"], estado_mes["mes"])
+            for _ in range(primer_dia):
+                grilla.add_widget(Label(text="", size_hint_y=None, height=dp(34)))
+            for dia in range(1, dias_en_mes + 1):
+                boton = Button(text=str(dia), size_hint_y=None, height=dp(34))
+
+                def elegir(_, d=dia):
+                    fecha_elegida = date(estado_mes["anio"], estado_mes["mes"], d).isoformat()
+                    popup.dismiss()
+                    al_elegir(fecha_elegida)
+
+                boton.bind(on_release=elegir)
+                grilla.add_widget(boton)
+
+        def mes_anterior(*_):
+            m, a = estado_mes["mes"] - 1, estado_mes["anio"]
+            if m == 0:
+                m, a = 12, a - 1
+            estado_mes["mes"], estado_mes["anio"] = m, a
+            pintar()
+
+        def mes_siguiente(*_):
+            m, a = estado_mes["mes"] + 1, estado_mes["anio"]
+            if m == 13:
+                m, a = 1, a + 1
+            estado_mes["mes"], estado_mes["anio"] = m, a
+            pintar()
+
+        btn_prev.bind(on_release=mes_anterior)
+        btn_next.bind(on_release=mes_siguiente)
+        pintar()
+
+        contenido.add_widget(self._fila_botones(("Cerrar", lambda *_: popup.dismiss())))
+        popup = Popup(title="Elige la fecha", content=contenido,
+                      size_hint=(0.92, None), height=dp(430), auto_dismiss=False)
+        popup.open()
+
     # ----- Registrar lote (Pasos 4 y 5 del blueprint) -----
 
-    def abrir_lote(self, upc, es_nuevo):
+    def abrir_lote(self, upc, es_nuevo, prellenado=None):
+        prellenado = prellenado or {}
         contenido = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(10))
         if es_nuevo:
-            f_nombre = self._campo(contenido, "Nombre del producto")
-            f_desc = self._campo(contenido, "Presentación (ej. 1 Litro)")
+            if prellenado.get("encontrado"):
+                contenido.add_widget(Label(
+                    text="Encontrado en Open Food Facts. Revisa y ajusta si hace falta.",
+                    size_hint_y=None, height=dp(30), color=(0.35, 0.75, 0.45, 1)))
+            f_nombre = self._campo(contenido, "Nombre del producto", prellenado.get("nombre", ""))
+            f_desc = self._campo(contenido, "Presentación (ej. 1 Litro)",
+                                 prellenado.get("descripcion", ""))
+            contenido.add_widget(Label(text="Tipo de unidad", size_hint_y=None, height=dp(22),
+                                       halign="left", text_size=(dp(300), None)))
+            f_unidad = Spinner(text=UNIDADES[0], values=UNIDADES,
+                               size_hint_y=None, height=dp(46))
+            contenido.add_widget(f_unidad)
         else:
             nombre = self.db["catalogo"][upc]["nombre"]
             contenido.add_widget(Label(text=f"{nombre}\nUPC {upc}", size_hint_y=None,
                                        height=dp(50)))
+
         por_defecto = (date.today() + timedelta(days=14)).isoformat()
-        f_fecha = self._campo(contenido, "Vencimiento (AAAA-MM-DD)", por_defecto)
+        contenido.add_widget(Label(text="Vencimiento (AAAA-MM-DD)", size_hint_y=None,
+                                   height=dp(22), halign="left", text_size=(dp(300), None)))
+        fila_fecha = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        f_fecha = TextInput(text=por_defecto, multiline=False)
+        btn_calendario = Button(text="📅", size_hint_x=None, width=dp(56))
+        fila_fecha.add_widget(f_fecha)
+        fila_fecha.add_widget(btn_calendario)
+        contenido.add_widget(fila_fecha)
+
+        def abrir_cal(*_):
+            self.abrir_calendario(f_fecha.text.strip(),
+                                  lambda iso: setattr(f_fecha, "text", iso))
+        btn_calendario.bind(on_release=abrir_cal)
+
         f_cant = self._campo(contenido, "Cantidad", "1", solo_numeros=True)
         msg = self._mensaje(contenido)
 
@@ -434,6 +585,7 @@ class SmartExpiryApp(App):
                 self.db["catalogo"][upc] = {
                     "nombre": f_nombre.text.strip() or "Sin nombre",
                     "descripcion": f_desc.text.strip(),
+                    "unidad": f_unidad.text,
                 }
             self.db["inventario"].append({
                 "id_lote": str(int(time.time() * 1000)),
@@ -449,7 +601,7 @@ class SmartExpiryApp(App):
         contenido.add_widget(self._fila_botones(
             ("Cancelar", lambda *_: popup.dismiss()),
             ("Guardar lote", guardar)))
-        alto = dp(470) if es_nuevo else dp(390)
+        alto = dp(610) if es_nuevo else dp(410)
         popup = Popup(title="Producto nuevo" if es_nuevo else "Registrar lote",
                       content=contenido, size_hint=(0.92, None), height=alto,
                       auto_dismiss=False)
