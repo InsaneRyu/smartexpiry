@@ -4,11 +4,18 @@
 
 import json
 import os
+import ssl
 import threading
 import time
 import urllib.request
 from calendar import monthrange
 from datetime import date, timedelta
+
+try:
+    import certifi
+    _CONTEXTO_SSL = ssl.create_default_context(cafile=certifi.where())
+except Exception:
+    _CONTEXTO_SSL = ssl.create_default_context()
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -288,8 +295,14 @@ class SmartExpiryApp(App):
         # Producto nuevo: primero probamos Open Food Facts (Paso 3 del blueprint)
         self._mostrar_buscando()
 
-        def al_terminar(nombre, cantidad_texto):
+        def al_terminar(nombre, cantidad_texto, error_texto):
             self._cerrar_buscando()
+            if error_texto:
+                self._mostrar_aviso(
+                    "No se pudo consultar Open Food Facts (puede que el producto "
+                    "simplemente no esté no esté en su base, o sea un problema de "
+                    "conexión). Completa los datos a mano.\n\n"
+                    f"Detalle técnico: {error_texto[:160]}")
             self.abrir_lote(upc, es_nuevo=True, prellenado={
                 "nombre": nombre or "",
                 "descripcion": cantidad_texto or "",
@@ -301,22 +314,28 @@ class SmartExpiryApp(App):
     def _consultar_openfoodfacts(self, upc, on_listo):
         """Busca el producto en Open Food Facts en un hilo aparte para no
         congelar la pantalla mientras responde. Siempre llama a on_listo,
-        haya encontrado algo o no."""
+        haya encontrado algo o no. error_texto queda vacío si la consulta
+        se hizo bien pero el producto simplemente no estaba en su base."""
         def tarea():
             nombre = None
             cantidad_texto = ""
+            error_texto = ""
             try:
                 url = f"https://world.openfoodfacts.org/api/v2/product/{upc}.json"
-                with urllib.request.urlopen(url, timeout=6) as resp:
+                peticion = urllib.request.Request(
+                    url, headers={"User-Agent": "SmartExpiryPro/1.0"})
+                with urllib.request.urlopen(peticion, timeout=10,
+                                            context=_CONTEXTO_SSL) as resp:
                     datos = json.loads(resp.read().decode("utf-8"))
                 if datos.get("status") == 1:
                     producto = datos.get("product", {})
                     nombre = (producto.get("product_name_es")
                               or producto.get("product_name") or None)
                     cantidad_texto = producto.get("quantity", "") or ""
-            except Exception:
-                nombre = None
-            Clock.schedule_once(lambda dt: on_listo(nombre, cantidad_texto), 0)
+                # si status no es 1, el producto no está en su base: no es un error
+            except Exception as e:
+                error_texto = f"{type(e).__name__}: {e}"
+            Clock.schedule_once(lambda dt: on_listo(nombre, cantidad_texto, error_texto), 0)
 
         threading.Thread(target=tarea, daemon=True).start()
 
