@@ -33,6 +33,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install buildozer
 
+      - name: Mantener la misma llave de firma entre compilaciones
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: smartexpiry-debug-keystore-v1
+
+      - name: Dar a esta compilación un número de versión único
+        run: |
+          sed -i "s/^android.numeric_version = .*/android.numeric_version = ${{ github.run_number }}/" buildozer.spec
+
       - name: Compilar APK
         run: buildozer -v android debug
         env:
