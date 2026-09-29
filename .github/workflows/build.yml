@@ -39,6 +39,16 @@ jobs:
           path: ~/.android/debug.keystore
           key: smartexpiry-debug-keystore-v1
 
+      - name: Crear la llave de firma solo si todavía no existe
+        run: |
+          mkdir -p ~/.android
+          if [ ! -f ~/.android/debug.keystore ]; then
+            keytool -genkey -v -keystore ~/.android/debug.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
       - name: Reutilizar el Android SDK/NDK y lo ya compilado antes
         uses: actions/cache@v4
         with:
