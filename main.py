@@ -7,6 +7,7 @@ import os
 import ssl
 import threading
 import time
+import urllib.parse
 import urllib.request
 from calendar import monthrange
 from datetime import date, timedelta
@@ -143,13 +144,17 @@ FloatLayout:
             text_size: self.size
         BoxLayout:
             size_hint_y: None
-            height: dp(48)
-            spacing: dp(8)
+            height: dp(44)
             TextInput:
                 id: buscar
                 hint_text: 'Buscar producto o UPC...'
                 multiline: False
                 on_text: app.refrescar()
+            Button:
+                text: '⚙'
+                size_hint_x: None
+                width: dp(44)
+                on_release: app.abrir_configuracion()
             Button:
                 text: 'Escanear'
                 size_hint_x: None
@@ -194,16 +199,22 @@ class SmartExpiryApp(App):
 
     def on_start(self):
         self.refrescar()
+        self._revisar_alerta_diaria()
 
     def cargar_db(self):
         if not os.path.exists(self.archivo):
             return {"catalogo": {}, "inventario": [],
-                    "config": {"rotacion_camara": 0, "rotacion_pantalla_base": 0}}
+                    "config": {"rotacion_camara": 0, "rotacion_pantalla_base": 0,
+                              "whatsapp_telefono": "", "whatsapp_apikey": "",
+                              "whatsapp_ultima_alerta": ""}}
         with open(self.archivo, "r", encoding="utf-8") as f:
             datos = json.load(f)
         config = datos.setdefault("config", {})
         config.setdefault("rotacion_camara", 0)
         config.setdefault("rotacion_pantalla_base", 0)
+        config.setdefault("whatsapp_telefono", "")
+        config.setdefault("whatsapp_apikey", "")
+        config.setdefault("whatsapp_ultima_alerta", "")
         return datos
 
     def guardar_db(self):
@@ -485,6 +496,134 @@ class SmartExpiryApp(App):
         aviso = Popup(title="Aviso", content=contenido,
                      size_hint=(0.85, None), height=dp(200), auto_dismiss=False)
         aviso.open()
+
+    # ----- Alertas por WhatsApp (CallMeBot) -----
+
+    def _enviar_whatsapp(self, mensaje, al_terminar=None):
+        """Manda un mensaje por WhatsApp usando CallMeBot, en un hilo aparte.
+        No hace nada si todavía no se configuró teléfono/API Key."""
+        telefono = self.db["config"].get("whatsapp_telefono", "").strip()
+        apikey = self.db["config"].get("whatsapp_apikey", "").strip()
+        if not telefono or not apikey:
+            if al_terminar:
+                Clock.schedule_once(
+                    lambda dt: al_terminar(False, "Falta configurar teléfono o API Key."), 0)
+            return
+
+        def tarea():
+            ok, error_texto = True, ""
+            try:
+                url = ("https://api.callmebot.com/whatsapp.php"
+                       f"?phone={urllib.parse.quote(telefono)}"
+                       f"&text={urllib.parse.quote(mensaje)}"
+                       f"&apikey={urllib.parse.quote(apikey)}")
+                with urllib.request.urlopen(url, timeout=10, context=_CONTEXTO_SSL):
+                    pass
+            except Exception as e:
+                ok = False
+                error_texto = f"{type(e).__name__}: {e}"
+            if al_terminar:
+                Clock.schedule_once(lambda dt: al_terminar(ok, error_texto), 0)
+
+        threading.Thread(target=tarea, daemon=True).start()
+
+    def _revisar_alerta_diaria(self, forzado=False):
+        """Revisa productos por vencer y manda UN mensaje resumen por
+        WhatsApp. Sin forzado, como máximo una vez por día."""
+        hoy = date.today().isoformat()
+        if not forzado and self.db["config"].get("whatsapp_ultima_alerta") == hoy:
+            return
+        if not self.db["config"].get("whatsapp_telefono") or \
+           not self.db["config"].get("whatsapp_apikey"):
+            return  # aún no configurado; no molestamos con avisos
+
+        urgentes = [l for l in self.db["inventario"]
+                    if dias_para_vencer(l["fecha_vencimiento"]) <= DIAS_ALERTA]
+        if not urgentes:
+            if forzado:
+                self._mostrar_aviso("No hay productos por vencer ahora mismo.")
+            return
+
+        urgentes.sort(key=lambda l: l["fecha_vencimiento"])
+        lineas = []
+        for lote in urgentes:
+            nombre = self.db["catalogo"].get(lote["codigo_upc"], {}).get("nombre", "Producto")
+            dias = dias_para_vencer(lote["fecha_vencimiento"])
+            texto_estado = "VENCIDO" if dias < 0 else f"vence en {dias}d"
+            lineas.append(f"- {nombre}: {lote['cantidad']} u. ({texto_estado})")
+        mensaje = "SmartExpiry Pro - Productos por revisar:\n" + "\n".join(lineas)
+
+        def al_terminar(ok, error_texto):
+            if ok:
+                self.db["config"]["whatsapp_ultima_alerta"] = hoy
+                self.guardar_db()
+                if forzado:
+                    self._mostrar_aviso(f"Alerta enviada por WhatsApp ({len(urgentes)} producto(s)).")
+            elif forzado:
+                self._mostrar_aviso(f"No se pudo enviar el mensaje.\n\nDetalle: {error_texto[:160]}")
+
+        self._enviar_whatsapp(mensaje, al_terminar)
+
+    def abrir_configuracion(self):
+        contenido = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(10))
+        contenido.add_widget(Label(
+            text="Alertas automáticas por WhatsApp (CallMeBot, gratis)",
+            size_hint_y=None, height=dp(26), bold=True))
+
+        f_tel = self._campo(contenido, "Tu número con código de país (ej. +50688887777)",
+                            self.db["config"].get("whatsapp_telefono", ""))
+        f_key = self._campo(contenido, "Tu API Key de CallMeBot",
+                            self.db["config"].get("whatsapp_apikey", ""))
+
+        contenido.add_widget(Label(
+            text="Para conseguir tu API Key (una sola vez):\n"
+                 "1. Agrega +34 644 59 71 68 a tus contactos\n"
+                 "2. Envíale por WhatsApp: \"I allow callmebot to send me messages\"\n"
+                 "3. En unos minutos te contesta con tu API Key",
+            size_hint_y=None, height=dp(110), halign="left", valign="top",
+            text_size=(dp(300), None)))
+
+        msg = self._mensaje(contenido)
+
+        def guardar_datos():
+            self.db["config"]["whatsapp_telefono"] = f_tel.text.strip()
+            self.db["config"]["whatsapp_apikey"] = f_key.text.strip()
+            self.guardar_db()
+
+        def guardar(*_):
+            guardar_datos()
+            popup.dismiss()
+
+        def probar(*_):
+            guardar_datos()
+            msg.color = (0.6, 0.6, 0.6, 1)
+            msg.text = "Enviando mensaje de prueba..."
+
+            def al_terminar(ok, error_texto):
+                if ok:
+                    msg.color = (0.35, 0.75, 0.45, 1)
+                    msg.text = "Enviado. Revisa tu WhatsApp en unos segundos."
+                else:
+                    msg.color = (1, 0.5, 0.45, 1)
+                    msg.text = f"No se pudo enviar: {error_texto[:100]}"
+
+            self._enviar_whatsapp("SmartExpiry Pro: mensaje de prueba ✅", al_terminar)
+
+        def enviar_ahora(*_):
+            guardar_datos()
+            popup.dismiss()
+            self._revisar_alerta_diaria(forzado=True)
+
+        contenido.add_widget(self._fila_botones(
+            ("Cancelar", lambda *_: popup.dismiss()),
+            ("Probar", probar)))
+        contenido.add_widget(self._fila_botones(
+            ("Guardar", guardar),
+            ("Enviar alerta ahora", enviar_ahora)))
+
+        popup = Popup(title="Alertas por WhatsApp", content=contenido,
+                      size_hint=(0.92, None), height=dp(560), auto_dismiss=False)
+        popup.open()
 
     # ----- Calendario para elegir fechas -----
 
