@@ -23,7 +23,7 @@ from kivy.clock import Clock
 from kivy.core.window import Window
 from kivy.lang import Builder
 from kivy.metrics import dp
-from kivy.properties import StringProperty
+from kivy.properties import ListProperty, StringProperty
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
 from kivy.uix.gridlayout import GridLayout
@@ -40,6 +40,19 @@ UNIDADES = ["Unidad", "Litro", "Mililitro (ml)", "Onza (oz)", "Paquete", "Caja"]
 NOMBRES_MES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
                "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
 
+# ---------- Tema visual: una sola paleta de colores para toda la app ----------
+COLOR_FONDO = (0.05, 0.08, 0.06, 1)
+COLOR_PANEL = (0.11, 0.16, 0.12, 1)
+COLOR_ACENTO = (0.29, 0.68, 0.45, 1)
+COLOR_ACENTO_OSCURO = (0.20, 0.50, 0.33, 1)
+COLOR_NEUTRO = (0.24, 0.29, 0.26, 1)
+COLOR_TEXTO = (0.94, 0.98, 0.95, 1)
+COLOR_TEXTO_TENUE = (0.60, 0.70, 0.63, 1)
+COLOR_TARJETA_OK = (0.15, 0.34, 0.23, 1)
+COLOR_TARJETA_WARN = (0.48, 0.36, 0.10, 1)
+COLOR_TARJETA_DANGER = (0.46, 0.20, 0.18, 1)
+
+Window.clearcolor = COLOR_FONDO
 Window.softinput_mode = "below_target"  # mantiene visible el campo donde escribes
 
 # En Android hay que pedir permiso de cámara en tiempo de ejecución.
@@ -100,12 +113,12 @@ def dias_para_vencer(fecha_texto):
 
 
 def estado(dias):
-    """Devuelve el texto de estado y su color (rojo, amarillo o verde)."""
+    """Devuelve el texto de estado y el color de tarjeta correspondiente."""
     if dias < 0:
-        return "VENCIDO", (0.75, 0.25, 0.22, 1)
+        return "VENCIDO", COLOR_TARJETA_DANGER
     if dias <= DIAS_ALERTA:
-        return f"POR VENCER ({dias}d)", (0.78, 0.55, 0.15, 1)
-    return f"OK ({dias}d)", (0.22, 0.50, 0.34, 1)
+        return f"POR VENCER ({dias}d)", COLOR_TARJETA_WARN
+    return f"OK ({dias}d)", COLOR_TARJETA_OK
 
 
 def lotes_ordenados(db, filtro=""):
@@ -121,39 +134,96 @@ def lotes_ordenados(db, filtro=""):
 # ---------- Diseño de la pantalla (lenguaje KV) ----------
 
 KV = """
+#:import COLOR_ACENTO __main__.COLOR_ACENTO
+#:import COLOR_ACENTO_OSCURO __main__.COLOR_ACENTO_OSCURO
+#:import COLOR_NEUTRO __main__.COLOR_NEUTRO
+#:import COLOR_PANEL __main__.COLOR_PANEL
+#:import COLOR_TEXTO __main__.COLOR_TEXTO
+#:import COLOR_TEXTO_TENUE __main__.COLOR_TEXTO_TENUE
+
+<Button>:
+    background_color: COLOR_ACENTO if self.state == 'normal' else COLOR_ACENTO_OSCURO
+    color: COLOR_TEXTO
+
+<TextInput>:
+    background_color: COLOR_PANEL
+    foreground_color: COLOR_TEXTO
+    hint_text_color: COLOR_TEXTO_TENUE
+    cursor_color: COLOR_ACENTO
+    padding: [dp(10), dp(10), dp(10), dp(10)]
+
+<Label>:
+    color: COLOR_TEXTO
+
+<Popup>:
+    title_color: COLOR_TEXTO
+    title_size: '17sp'
+    separator_color: COLOR_ACENTO
+    background_color: (0.22, 0.30, 0.25, 1)
+
 <FilaLote>:
     background_normal: ''
+    background_down: ''
+    background_color: 0, 0, 0, 0
+    color: COLOR_TEXTO
     markup: True
     halign: 'left'
     valign: 'middle'
     text_size: self.width - dp(28), self.height
     font_size: '15sp'
+    canvas.before:
+        Color:
+            rgba: self.color_estado
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(12)]
+
+<BotonFAB>:
+    background_normal: ''
+    background_down: ''
+    background_color: 0, 0, 0, 0
+    color: COLOR_TEXTO
+    canvas.before:
+        Color:
+            rgba: 0.04, 0.10, 0.07, 0.55
+        Ellipse:
+            pos: self.x - dp(2), self.y - dp(5)
+            size: self.width + dp(4), self.height + dp(4)
+        Color:
+            rgba: COLOR_ACENTO if self.state == 'normal' else COLOR_ACENTO_OSCURO
+        Ellipse:
+            pos: self.pos
+            size: self.size
 
 FloatLayout:
     BoxLayout:
         orientation: 'vertical'
-        padding: dp(10)
-        spacing: dp(8)
+        padding: dp(12)
+        spacing: dp(10)
         Label:
             id: titulo
             size_hint_y: None
             height: dp(40)
             font_size: '18sp'
             bold: True
+            color: COLOR_ACENTO
             halign: 'left'
             text_size: self.size
         BoxLayout:
             size_hint_y: None
-            height: dp(44)
+            height: dp(46)
+            spacing: dp(8)
             TextInput:
                 id: buscar
-                hint_text: 'Buscar producto o UPC...'
+                hint_text: '🔍 Buscar producto o UPC...'
                 multiline: False
                 on_text: app.refrescar()
             Button:
                 text: '⚙'
                 size_hint_x: None
-                width: dp(44)
+                width: dp(46)
+                background_color: COLOR_NEUTRO
                 on_release: app.abrir_configuracion()
             Button:
                 text: 'Escanear'
@@ -164,13 +234,13 @@ FloatLayout:
             id: rv
             viewclass: 'FilaLote'
             RecycleBoxLayout:
-                default_size: None, dp(72)
+                default_size: None, dp(76)
                 default_size_hint: 1, None
                 size_hint_y: None
                 height: self.minimum_height
                 orientation: 'vertical'
-                spacing: dp(6)
-    Button:
+                spacing: dp(8)
+    BotonFAB:
         text: '+'
         font_size: '32sp'
         size_hint: None, None
@@ -183,9 +253,15 @@ FloatLayout:
 class FilaLote(Button):
     """Una fila de la lista. Al tocarla se abre el diálogo de baja."""
     id_lote = StringProperty("")
+    color_estado = ListProperty(COLOR_TARJETA_OK)
 
     def on_release(self):
         App.get_running_app().abrir_baja(self.id_lote)
+
+
+class BotonFAB(Button):
+    """El botón circular flotante (+), con sombra suave."""
+    pass
 
 
 class SmartExpiryApp(App):
@@ -238,7 +314,7 @@ class SmartExpiryApp(App):
             datos.append({
                 "text": (f"[b]{nombre}[/b] {detalle}\n"
                          f"Cant: {lote['cantidad']} | Vence: {lote['fecha_vencimiento']} | {texto_estado}"),
-                "background_color": color,
+                "color_estado": color,
                 "id_lote": lote["id_lote"],
             })
         ids.rv.data = datos
@@ -254,6 +330,8 @@ class SmartExpiryApp(App):
         fila = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(10))
         for texto, accion in pares:
             boton = Button(text=texto)
+            if texto.strip().lower() in ("cancelar", "cerrar", "entendido"):
+                boton.background_color = COLOR_NEUTRO
             boton.bind(on_release=accion)
             fila.add_widget(boton)
         return fila
