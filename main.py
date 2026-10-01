@@ -135,6 +135,7 @@ def lotes_ordenados(db, filtro=""):
 # ---------- Diseño de la pantalla (lenguaje KV) ----------
 
 KV = """
+#:import Clock kivy.clock.Clock
 #:import COLOR_ACENTO __main__.COLOR_ACENTO
 #:import COLOR_ACENTO_OSCURO __main__.COLOR_ACENTO_OSCURO
 #:import COLOR_CAMPO __main__.COLOR_CAMPO
@@ -146,6 +147,7 @@ KV = """
 <Button>:
     background_color: COLOR_ACENTO if self.state == 'normal' else COLOR_ACENTO_OSCURO
     color: COLOR_TEXTO
+    on_release: Clock.schedule_once(lambda dt: setattr(self, 'state', 'normal'), 0)
 
 <TextInput>:
     background_color: COLOR_CAMPO
@@ -165,6 +167,7 @@ KV = """
     size_hint_y: None
     height: dp(46)
     padding: [dp(12), dp(4)]
+    on_release: Clock.schedule_once(lambda dt: setattr(self, 'state', 'normal'), 0)
 
 <Popup>:
     title_color: COLOR_TEXTO
@@ -182,6 +185,7 @@ KV = """
     valign: 'middle'
     text_size: self.width - dp(28), self.height
     font_size: '15sp'
+    on_release: Clock.schedule_once(lambda dt: setattr(self, 'state', 'normal'), 0)
     canvas.before:
         Color:
             rgba: self.color_estado
@@ -195,6 +199,7 @@ KV = """
     background_down: ''
     background_color: 0, 0, 0, 0
     color: COLOR_TEXTO
+    on_release: Clock.schedule_once(lambda dt: setattr(self, 'state', 'normal'), 0)
     canvas.before:
         Color:
             rgba: 0.04, 0.10, 0.07, 0.55
@@ -212,6 +217,7 @@ KV = """
     background_down: ''
     background_color: COLOR_ACENTO
     color: COLOR_TEXTO
+    on_release: Clock.schedule_once(lambda dt: setattr(self, 'state', 'normal'), 0)
     canvas.before:
         Color:
             rgba: self.background_color if self.state == 'normal' else COLOR_ACENTO_OSCURO
@@ -314,6 +320,22 @@ class SmartExpiryApp(App):
     def on_start(self):
         self.refrescar()
         self._revisar_alerta_diaria()
+        self._arrancar_servicio_de_fondo()
+
+    def _arrancar_servicio_de_fondo(self):
+        """Inicia el servicio que manda alertas aunque la app esté cerrada.
+        Si algo falla (versión de Android, nombre del servicio, etc.), la
+        app sigue funcionando normal, solo que sin esta parte."""
+        if platform != "android":
+            return
+        try:
+            from jnius import autoclass
+            nombre_paquete = "org.smartexpiry.smartexpiry"
+            ServicioAlertas = autoclass(f"{nombre_paquete}.ServiceAlertas")
+            actividad = autoclass("org.kivy.android.PythonActivity").mActivity
+            ServicioAlertas.start(actividad, "")
+        except Exception:
+            pass
 
     def cargar_db(self):
         if not os.path.exists(self.archivo):
