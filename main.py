@@ -157,6 +157,15 @@ KV = """
 <Label>:
     color: COLOR_TEXTO
 
+<SpinnerOption>:
+    background_normal: ''
+    background_down: ''
+    background_color: COLOR_CAMPO
+    color: COLOR_TEXTO
+    size_hint_y: None
+    height: dp(46)
+    padding: [dp(12), dp(4)]
+
 <Popup>:
     title_color: COLOR_TEXTO
     title_size: '17sp'
@@ -273,12 +282,12 @@ FloatLayout:
 
 
 class FilaLote(Button):
-    """Una fila de la lista. Al tocarla se abre el diálogo de baja."""
+    """Una fila de la lista. Al tocarla se abre el menú de opciones (editar o dar de baja)."""
     id_lote = StringProperty("")
     color_estado = ListProperty(COLOR_TARJETA_OK)
 
     def on_release(self):
-        App.get_running_app().abrir_baja(self.id_lote)
+        App.get_running_app().abrir_detalle(self.id_lote)
 
 
 class BotonFAB(Button):
@@ -335,10 +344,10 @@ class SmartExpiryApp(App):
         for lote in lotes:
             producto = self.db["catalogo"].get(lote["codigo_upc"], {})
             nombre = escape_markup(producto.get("nombre", "Sin nombre"))
-            detalle = escape_markup(producto.get("descripcion", ""))
             unidad = producto.get("unidad", "")
+            detalle = f"UPC {lote['codigo_upc']}"
             if unidad and unidad != "Unidad":
-                detalle = f"{detalle} · {escape_markup(unidad)}" if detalle else escape_markup(unidad)
+                detalle = f"{detalle} · {escape_markup(unidad)}"
             texto_estado, color = estado(dias_para_vencer(lote["fecha_vencimiento"]))
             datos.append({
                 "text": (f"[b]{nombre}[/b] {detalle}\n"
@@ -361,7 +370,14 @@ class SmartExpiryApp(App):
             boton = BotonRedondeado(text=texto)
             if texto.strip().lower() in ("cancelar", "cerrar", "entendido"):
                 boton.background_color = COLOR_NEUTRO
-            boton.bind(on_release=accion)
+            elif texto.strip().lower() in ("eliminar lote",):
+                boton.background_color = COLOR_PELIGRO
+
+            def envoltura(instancia, accion=accion):
+                instancia.state = "normal"  # evita que quede "marcado" tras tocarlo
+                accion(instancia)
+
+            boton.bind(on_release=envoltura)
             fila.add_widget(boton)
         return fila
 
@@ -774,7 +790,20 @@ class SmartExpiryApp(App):
             base = date.today()
         estado_mes = {"anio": base.year, "mes": base.month}
 
-        contenido = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(10))
+        # padding superior extra para que los botones no choquen con la
+        # línea divisoria que el Popup dibuja debajo de su título
+        contenido = BoxLayout(orientation="vertical", spacing=dp(8),
+                              padding=[dp(10), dp(18), dp(10), dp(10)])
+
+        cabecera_anio = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
+        btn_prev_anio = BotonRedondeado(text="<< Año", size_hint_x=None, width=dp(80))
+        lbl_anio = Label(text="")
+        btn_next_anio = BotonRedondeado(text="Año >>", size_hint_x=None, width=dp(80))
+        cabecera_anio.add_widget(btn_prev_anio)
+        cabecera_anio.add_widget(lbl_anio)
+        cabecera_anio.add_widget(btn_next_anio)
+        contenido.add_widget(cabecera_anio)
+
         cabecera = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
         btn_prev = BotonRedondeado(text="< Mes", size_hint_x=None, width=dp(80))
         lbl_mes = Label(text="")
@@ -788,6 +817,7 @@ class SmartExpiryApp(App):
         contenido.add_widget(grilla)
 
         def pintar():
+            lbl_anio.text = str(estado_mes["anio"])
             lbl_mes.text = f"{NOMBRES_MES[estado_mes['mes'] - 1].capitalize()} {estado_mes['anio']}"
             grilla.clear_widgets()
             for inicial in ["L", "M", "M", "J", "V", "S", "D"]:
@@ -821,13 +851,23 @@ class SmartExpiryApp(App):
             estado_mes["mes"], estado_mes["anio"] = m, a
             pintar()
 
+        def anio_anterior(*_):
+            estado_mes["anio"] -= 1
+            pintar()
+
+        def anio_siguiente(*_):
+            estado_mes["anio"] += 1
+            pintar()
+
         btn_prev.bind(on_release=mes_anterior)
         btn_next.bind(on_release=mes_siguiente)
+        btn_prev_anio.bind(on_release=anio_anterior)
+        btn_next_anio.bind(on_release=anio_siguiente)
         pintar()
 
         contenido.add_widget(self._fila_botones(("Cerrar", lambda *_: popup.dismiss())))
         popup = Popup(title="Elige la fecha", content=contenido,
-                      size_hint=(0.92, None), height=dp(430), auto_dismiss=False)
+                      size_hint=(0.92, None), height=dp(500), auto_dismiss=False)
         popup.open()
 
     # ----- Registrar lote (Pasos 4 y 5 del blueprint) -----
@@ -847,6 +887,7 @@ class SmartExpiryApp(App):
                                        halign="left", text_size=(dp(300), None)))
             f_unidad = Spinner(text=UNIDADES[0], values=UNIDADES,
                                size_hint_y=None, height=dp(46))
+            f_unidad.bind(text=lambda inst, val: setattr(inst, "state", "normal"))
             contenido.add_widget(f_unidad)
         else:
             nombre = self.db["catalogo"][upc]["nombre"]
@@ -907,6 +948,105 @@ class SmartExpiryApp(App):
         popup.open()
 
     # ----- Consumo o baja (al tocar una fila) -----
+
+    def abrir_detalle(self, id_lote):
+        """Menú que aparece al tocar una fila: editar el producto o darlo de baja."""
+        lote = next((l for l in self.db["inventario"] if l["id_lote"] == id_lote), None)
+        if lote is None:
+            return
+        producto = self.db["catalogo"].get(lote["codigo_upc"], {})
+        nombre = producto.get("nombre", "Sin nombre")
+
+        contenido = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
+        contenido.add_widget(Label(text=f"{nombre}\nUPC {lote['codigo_upc']}",
+                                   size_hint_y=None, height=dp(54)))
+
+        def ir_a_editar(*_):
+            popup.dismiss()
+            self.abrir_editar_producto(id_lote)
+
+        def ir_a_baja(*_):
+            popup.dismiss()
+            self.abrir_baja(id_lote)
+
+        contenido.add_widget(self._fila_botones(
+            ("Editar producto", ir_a_editar),
+            ("Dar de baja", ir_a_baja)))
+        contenido.add_widget(self._fila_botones(
+            ("Cancelar", lambda *_: popup.dismiss()),))
+        popup = Popup(title="Opciones", content=contenido,
+                      size_hint=(0.85, None), height=dp(280), auto_dismiss=False)
+        popup.open()
+
+    def abrir_editar_producto(self, id_lote):
+        """Permite modificar nombre, presentación, unidad, fecha y cantidad
+        de un producto ya registrado, en cualquier momento."""
+        lote = next((l for l in self.db["inventario"] if l["id_lote"] == id_lote), None)
+        if lote is None:
+            return
+        upc = lote["codigo_upc"]
+        producto = self.db["catalogo"].get(upc, {})
+
+        contenido = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(10))
+        contenido.add_widget(Label(text=f"UPC {upc}", size_hint_y=None, height=dp(22),
+                                   color=COLOR_TEXTO_TENUE, halign="left",
+                                   text_size=(dp(300), None)))
+        f_nombre = self._campo(contenido, "Nombre del producto", producto.get("nombre", ""))
+        f_desc = self._campo(contenido, "Presentación (ej. 1 Litro)",
+                             producto.get("descripcion", ""))
+
+        contenido.add_widget(Label(text="Tipo de unidad", size_hint_y=None, height=dp(22),
+                                   halign="left", text_size=(dp(300), None)))
+        f_unidad = Spinner(text=producto.get("unidad", UNIDADES[0]), values=UNIDADES,
+                           size_hint_y=None, height=dp(46))
+        f_unidad.bind(text=lambda inst, val: setattr(inst, "state", "normal"))
+        contenido.add_widget(f_unidad)
+
+        contenido.add_widget(Label(text="Vencimiento de este lote (AAAA-MM-DD)",
+                                   size_hint_y=None, height=dp(22), halign="left",
+                                   text_size=(dp(300), None)))
+        fila_fecha = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        f_fecha = TextInput(text=lote["fecha_vencimiento"], multiline=False)
+        btn_calendario = BotonRedondeado(text="Fecha", size_hint_x=None, width=dp(80))
+        fila_fecha.add_widget(f_fecha)
+        fila_fecha.add_widget(btn_calendario)
+        contenido.add_widget(fila_fecha)
+
+        def abrir_cal(*_):
+            self.abrir_calendario(f_fecha.text.strip(),
+                                  lambda iso: setattr(f_fecha, "text", iso))
+        btn_calendario.bind(on_release=abrir_cal)
+
+        f_cant = self._campo(contenido, "Cantidad de este lote",
+                             str(lote["cantidad"]), solo_numeros=True)
+        msg = self._mensaje(contenido)
+
+        def guardar(*_):
+            try:
+                fecha = date.fromisoformat(f_fecha.text.strip()).isoformat()
+            except ValueError:
+                msg.text = "Fecha no válida. Ejemplo: 2026-12-31"
+                return
+            if not f_cant.text.strip().isdigit() or int(f_cant.text) < 1:
+                msg.text = "La cantidad debe ser 1 o más."
+                return
+            self.db["catalogo"][upc] = {
+                "nombre": f_nombre.text.strip() or "Sin nombre",
+                "descripcion": f_desc.text.strip(),
+                "unidad": f_unidad.text,
+            }
+            lote["fecha_vencimiento"] = fecha
+            lote["cantidad"] = int(f_cant.text)
+            self.guardar_db()
+            popup.dismiss()
+            self.refrescar()
+
+        contenido.add_widget(self._fila_botones(
+            ("Cancelar", lambda *_: popup.dismiss()),
+            ("Guardar cambios", guardar)))
+        popup = Popup(title="Editar producto", content=contenido,
+                      size_hint=(0.92, None), height=dp(610), auto_dismiss=False)
+        popup.open()
 
     def abrir_baja(self, id_lote):
         lote = next((l for l in self.db["inventario"] if l["id_lote"] == id_lote), None)
