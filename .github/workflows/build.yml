@@ -33,21 +33,34 @@ jobs:
           python -m pip install --upgrade pip
           pip install buildozer
 
-      - name: Mantener la misma llave de firma entre compilaciones
+      - name: Mantener la misma llave de firma entre compilaciones (respaldo)
         uses: actions/cache@v4
         with:
           path: ~/.android/debug.keystore
           key: smartexpiry-debug-keystore-v1
 
-      - name: Crear la llave de firma solo si todavía no existe
+      - name: Usar la llave guardada en el repositorio, o crear una nueva
         run: |
           mkdir -p ~/.android
-          if [ ! -f ~/.android/debug.keystore ]; then
+          if [ -f debug.keystore ]; then
+            cp debug.keystore ~/.android/debug.keystore
+            echo "Usando la llave guardada en el repositorio (debug.keystore)."
+          elif [ -f ~/.android/debug.keystore ]; then
+            echo "Usando la llave restaurada de la caché."
+          else
             keytool -genkey -v -keystore ~/.android/debug.keystore \
               -storepass android -alias androiddebugkey -keypass android \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
+            echo "Llave nueva creada. Descárgala del Artifact 'llave-de-firma-guardar'"
+            echo "y súbela al repositorio como 'debug.keystore' para fijarla para siempre."
           fi
+
+      - name: Guardar la llave como Artifact (solo hace falta la primera vez)
+        uses: actions/upload-artifact@v4
+        with:
+          name: llave-de-firma-guardar
+          path: ~/.android/debug.keystore
 
       - name: Reutilizar el Android SDK/NDK y lo ya compilado antes
         uses: actions/cache@v4
