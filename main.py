@@ -887,8 +887,9 @@ class SmartExpiryApp(App):
                     text="Encontrado en Open Food Facts. Revisa y ajusta si hace falta.",
                     size_hint_y=None, height=dp(30), color=(0.35, 0.75, 0.45, 1)))
             f_nombre = self._campo(contenido, "Nombre del producto", prellenado.get("nombre", ""))
-            f_desc = self._campo(contenido, "Presentación (ej. 1 Litro)",
-                                 prellenado.get("descripcion", ""))
+            f_upc_campo = self._campo(contenido, "UPC", upc)
+            f_upc_campo.readonly = True
+            f_upc_campo.foreground_color = COLOR_TEXTO_TENUE
             contenido.add_widget(Label(text="Tipo de unidad", size_hint_y=None, height=dp(22),
                                        halign="left", text_size=(dp(300), None)))
             f_unidad = Spinner(text=UNIDADES[0], values=UNIDADES,
@@ -930,7 +931,7 @@ class SmartExpiryApp(App):
             if es_nuevo:
                 self.db["catalogo"][upc] = {
                     "nombre": f_nombre.text.strip() or "Sin nombre",
-                    "descripcion": f_desc.text.strip(),
+                    "descripcion": prellenado.get("descripcion", ""),
                     "unidad": f_unidad.text,
                 }
             self.db["inventario"].append({
@@ -994,12 +995,10 @@ class SmartExpiryApp(App):
         producto = self.db["catalogo"].get(upc, {})
 
         contenido = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(10))
-        contenido.add_widget(Label(text=f"UPC {upc}", size_hint_y=None, height=dp(22),
-                                   color=COLOR_TEXTO_TENUE, halign="left",
-                                   text_size=(dp(300), None)))
         f_nombre = self._campo(contenido, "Nombre del producto", producto.get("nombre", ""))
-        f_desc = self._campo(contenido, "Presentación (ej. 1 Litro)",
-                             producto.get("descripcion", ""))
+        f_upc_campo = self._campo(contenido, "UPC", upc)
+        f_upc_campo.readonly = True
+        f_upc_campo.foreground_color = COLOR_TEXTO_TENUE
 
         contenido.add_widget(Label(text="Tipo de unidad", size_hint_y=None, height=dp(22),
                                    halign="left", text_size=(dp(300), None)))
@@ -1038,7 +1037,7 @@ class SmartExpiryApp(App):
                 return
             self.db["catalogo"][upc] = {
                 "nombre": f_nombre.text.strip() or "Sin nombre",
-                "descripcion": f_desc.text.strip(),
+                "descripcion": producto.get("descripcion", ""),
                 "unidad": f_unidad.text,
             }
             lote["fecha_vencimiento"] = fecha
