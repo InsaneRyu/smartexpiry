@@ -721,7 +721,9 @@ class SmartExpiryApp(App):
         self._enviar_whatsapp(mensaje, al_terminar)
 
     def abrir_configuracion(self):
-        contenido = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(10))
+        contenido = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(10),
+                              size_hint_y=None)
+        contenido.bind(minimum_height=contenido.setter("height"))
         contenido.add_widget(Label(
             text="Alertas automáticas por WhatsApp (CallMeBot, gratis)",
             size_hint_y=None, height=dp(26), bold=True))
@@ -731,13 +733,15 @@ class SmartExpiryApp(App):
         f_key = self._campo(contenido, "Tu API Key de CallMeBot",
                             self.db["config"].get("whatsapp_apikey", ""))
 
-        contenido.add_widget(Label(
+        instrucciones = Label(
             text="Para conseguir tu API Key (una sola vez):\n"
                  "1. Agrega +34 644 59 71 68 a tus contactos\n"
                  "2. Envíale por WhatsApp: \"I allow callmebot to send me messages\"\n"
                  "3. En unos minutos te contesta con tu API Key",
-            size_hint_y=None, height=dp(110), halign="left", valign="top",
-            text_size=(dp(300), None)))
+            size_hint_y=None, halign="left", valign="top")
+        instrucciones.bind(width=lambda inst, w: setattr(inst, "text_size", (w, None)))
+        instrucciones.bind(texture_size=lambda inst, val: setattr(inst, "height", val[1]))
+        contenido.add_widget(instrucciones)
 
         msg = self._mensaje(contenido)
 
@@ -777,7 +781,9 @@ class SmartExpiryApp(App):
             ("Guardar", guardar),
             ("Enviar alerta ahora", enviar_ahora)))
 
-        popup = Popup(title="Alertas por WhatsApp", content=contenido,
+        scroll = ScrollView(do_scroll_x=False)
+        scroll.add_widget(contenido)
+        popup = Popup(title="Alertas por WhatsApp", content=scroll,
                       size_hint=(0.92, None), height=dp(560), auto_dismiss=False)
         popup.open()
 
