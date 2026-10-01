@@ -41,17 +41,17 @@ NOMBRES_MES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
                "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
 
 # ---------- Tema visual: una sola paleta de colores para toda la app ----------
-COLOR_FONDO = (0.05, 0.08, 0.06, 1)
-COLOR_PANEL = (0.11, 0.16, 0.12, 1)
-COLOR_CAMPO = (0.17, 0.23, 0.18, 1)
-COLOR_ACENTO = (0.29, 0.68, 0.45, 1)
-COLOR_ACENTO_OSCURO = (0.20, 0.50, 0.33, 1)
-COLOR_NEUTRO = (0.24, 0.29, 0.26, 1)
-COLOR_TEXTO = (0.94, 0.98, 0.95, 1)
-COLOR_TEXTO_TENUE = (0.60, 0.70, 0.63, 1)
-COLOR_TARJETA_OK = (0.15, 0.34, 0.23, 1)
-COLOR_TARJETA_WARN = (0.48, 0.36, 0.10, 1)
-COLOR_TARJETA_DANGER = (0.46, 0.20, 0.18, 1)
+COLOR_FONDO = (0.06, 0.07, 0.09, 1)
+COLOR_PANEL = (0.12, 0.14, 0.17, 1)
+COLOR_CAMPO = (0.18, 0.20, 0.24, 1)
+COLOR_ACENTO = (0.30, 0.48, 0.68, 1)
+COLOR_ACENTO_OSCURO = (0.20, 0.33, 0.48, 1)
+COLOR_NEUTRO = (0.27, 0.29, 0.33, 1)
+COLOR_TEXTO = (0.96, 0.97, 0.99, 1)
+COLOR_TEXTO_TENUE = (0.63, 0.67, 0.73, 1)
+COLOR_TARJETA_OK = (0.14, 0.30, 0.38, 1)
+COLOR_TARJETA_WARN = (0.46, 0.35, 0.12, 1)
+COLOR_TARJETA_DANGER = (0.46, 0.20, 0.19, 1)
 
 Window.clearcolor = COLOR_FONDO
 Window.softinput_mode = "below_target"  # mantiene visible el campo donde escribes
@@ -417,10 +417,9 @@ class SmartExpiryApp(App):
             self._cerrar_buscando()
             if error_texto:
                 self._mostrar_aviso(
-                    "No se pudo consultar Open Food Facts (puede que el producto "
-                    "simplemente no esté no esté en su base, o sea un problema de "
-                    "conexión). Completa los datos a mano.\n\n"
-                    f"Detalle técnico: {error_texto[:160]}")
+                    f"{self._mensaje_amigable_red(error_texto)}\n\n"
+                    "Completa los datos a mano; también puede que el producto "
+                    "simplemente no esté en la base de Open Food Facts.")
             self.abrir_lote(upc, es_nuevo=True, prellenado={
                 "nombre": nombre or "",
                 "descripcion": cantidad_texto or "",
@@ -429,11 +428,12 @@ class SmartExpiryApp(App):
 
         self._consultar_openfoodfacts(upc, al_terminar)
 
-    def _consultar_openfoodfacts(self, upc, on_listo):
+    def _consultar_openfoodfacts(self, upc, on_listo, intento=1):
         """Busca el producto en Open Food Facts en un hilo aparte para no
-        congelar la pantalla mientras responde. Siempre llama a on_listo,
-        haya encontrado algo o no. error_texto queda vacío si la consulta
-        se hizo bien pero el producto simplemente no estaba en su base."""
+        congelar la pantalla mientras responde. Si falla por algo que puede
+        ser pasajero (conexión lenta, corte momentáneo), reintenta una vez
+        sola antes de rendirse. error_texto queda vacío si la consulta se
+        hizo bien pero el producto simplemente no estaba en su base."""
         def tarea():
             nombre = None
             cantidad_texto = ""
@@ -442,7 +442,7 @@ class SmartExpiryApp(App):
                 url = f"https://world.openfoodfacts.org/api/v2/product/{upc}.json"
                 peticion = urllib.request.Request(
                     url, headers={"User-Agent": "SmartExpiryPro/1.0"})
-                with urllib.request.urlopen(peticion, timeout=10,
+                with urllib.request.urlopen(peticion, timeout=8,
                                             context=_CONTEXTO_SSL) as resp:
                     datos = json.loads(resp.read().decode("utf-8"))
                 if datos.get("status") == 1:
@@ -453,9 +453,29 @@ class SmartExpiryApp(App):
                 # si status no es 1, el producto no está en su base: no es un error
             except Exception as e:
                 error_texto = f"{type(e).__name__}: {e}"
+
+            if error_texto and intento < 2:
+                time.sleep(1.5)
+                Clock.schedule_once(
+                    lambda dt: self._consultar_openfoodfacts(upc, on_listo, intento + 1), 0)
+                return
+
             Clock.schedule_once(lambda dt: on_listo(nombre, cantidad_texto, error_texto), 0)
 
         threading.Thread(target=tarea, daemon=True).start()
+
+    @staticmethod
+    def _mensaje_amigable_red(error_texto):
+        """Traduce el error técnico a algo que un usuario pueda entender."""
+        minuscula = error_texto.lower()
+        if "timed out" in minuscula or "timeout" in minuscula:
+            return "La conexión a internet está muy lenta o no respondió a tiempo."
+        if ("gaierror" in minuscula or "name or service not known" in minuscula
+                or "network is unreachable" in minuscula or "nodename" in minuscula):
+            return "No hay conexión a internet en este momento."
+        if "certificate" in minuscula or "ssl" in minuscula:
+            return "Hubo un problema de seguridad al conectar (certificado)."
+        return "No se pudo conectar a internet."
 
     def _mostrar_buscando(self):
         contenido = BoxLayout(orientation="vertical", padding=dp(20))
@@ -562,6 +582,7 @@ class SmartExpiryApp(App):
 
         tarea = None
         fotogramas_a_descartar = [6]  # ignora los primeros, pueden venir de la sesión anterior
+        analizando = [False]  # evita acumular análisis si uno tarda más de 0.3s
 
         def intentar_leer(dt):
             if fotogramas_a_descartar[0] > 0:
@@ -569,21 +590,33 @@ class SmartExpiryApp(App):
                 if fotogramas_a_descartar[0] == 0:
                     estado_txt.text = "Apunta al código de barras..."
                 return
+            if analizando[0]:
+                return  # el fotograma anterior todavía se está analizando
             textura = camara.texture
             if textura is None:
                 return
-            try:
-                ancho, alto = textura.size
-                datos = textura.pixels
-                imagen = PILImage.frombytes("RGBA", (ancho, alto), datos).convert("L")
-                resultados = zbar_decode(imagen)
-            except Exception:
-                return
-            if resultados:
-                codigo = resultados[0].data.decode("utf-8", errors="ignore").strip()
-                if codigo:
-                    cerrar()
-                    self._procesar_codigo(codigo, modo)
+            ancho, alto = textura.size
+            datos = textura.pixels
+            analizando[0] = True
+
+            def analizar_en_segundo_plano():
+                codigo = None
+                try:
+                    imagen = PILImage.frombytes("RGBA", (ancho, alto), datos).convert("L")
+                    resultados = zbar_decode(imagen)
+                    if resultados:
+                        codigo = resultados[0].data.decode("utf-8", errors="ignore").strip()
+                except Exception:
+                    codigo = None
+
+                def terminar(dt2):
+                    analizando[0] = False
+                    if codigo:
+                        cerrar()
+                        self._procesar_codigo(codigo, modo)
+                Clock.schedule_once(terminar, 0)
+
+            threading.Thread(target=analizar_en_segundo_plano, daemon=True).start()
 
         def cerrar(*_):
             if tarea:
