@@ -43,6 +43,7 @@ NOMBRES_MES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
 # ---------- Tema visual: una sola paleta de colores para toda la app ----------
 COLOR_FONDO = (0.05, 0.08, 0.06, 1)
 COLOR_PANEL = (0.11, 0.16, 0.12, 1)
+COLOR_CAMPO = (0.17, 0.23, 0.18, 1)
 COLOR_ACENTO = (0.29, 0.68, 0.45, 1)
 COLOR_ACENTO_OSCURO = (0.20, 0.50, 0.33, 1)
 COLOR_NEUTRO = (0.24, 0.29, 0.26, 1)
@@ -136,6 +137,7 @@ def lotes_ordenados(db, filtro=""):
 KV = """
 #:import COLOR_ACENTO __main__.COLOR_ACENTO
 #:import COLOR_ACENTO_OSCURO __main__.COLOR_ACENTO_OSCURO
+#:import COLOR_CAMPO __main__.COLOR_CAMPO
 #:import COLOR_NEUTRO __main__.COLOR_NEUTRO
 #:import COLOR_PANEL __main__.COLOR_PANEL
 #:import COLOR_TEXTO __main__.COLOR_TEXTO
@@ -146,7 +148,7 @@ KV = """
     color: COLOR_TEXTO
 
 <TextInput>:
-    background_color: COLOR_PANEL
+    background_color: COLOR_CAMPO
     foreground_color: COLOR_TEXTO
     hint_text_color: COLOR_TEXTO_TENUE
     cursor_color: COLOR_ACENTO
@@ -196,11 +198,31 @@ KV = """
             pos: self.pos
             size: self.size
 
+<BotonRedondeado>:
+    background_normal: ''
+    background_down: ''
+    background_color: COLOR_ACENTO
+    color: COLOR_TEXTO
+    canvas.before:
+        Color:
+            rgba: self.background_color if self.state == 'normal' else COLOR_ACENTO_OSCURO
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(14)]
+
 FloatLayout:
     BoxLayout:
         orientation: 'vertical'
         padding: dp(12)
         spacing: dp(10)
+        canvas.before:
+            Color:
+                rgba: COLOR_PANEL
+            RoundedRectangle:
+                pos: self.pos
+                size: self.size
+                radius: [dp(16)]
         Label:
             id: titulo
             size_hint_y: None
@@ -216,16 +238,16 @@ FloatLayout:
             spacing: dp(8)
             TextInput:
                 id: buscar
-                hint_text: '🔍 Buscar producto o UPC...'
+                hint_text: 'Buscar producto o UPC...'
                 multiline: False
                 on_text: app.refrescar()
-            Button:
-                text: '⚙'
+            BotonRedondeado:
+                text: 'Ajustes'
                 size_hint_x: None
-                width: dp(46)
+                width: dp(100)
                 background_color: COLOR_NEUTRO
                 on_release: app.abrir_configuracion()
-            Button:
+            BotonRedondeado:
                 text: 'Escanear'
                 size_hint_x: None
                 width: dp(110)
@@ -261,6 +283,13 @@ class FilaLote(Button):
 
 class BotonFAB(Button):
     """El botón circular flotante (+), con sombra suave."""
+    pass
+
+
+class BotonRedondeado(Button):
+    """Botón con esquinas bien redondeadas, usado en diálogos y acciones.
+    background_color decide el color de relleno (se puede cambiar desde
+    Python, por ejemplo para los botones 'Cancelar')."""
     pass
 
 
@@ -329,7 +358,7 @@ class SmartExpiryApp(App):
     def _fila_botones(self, *pares):
         fila = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(10))
         for texto, accion in pares:
-            boton = Button(text=texto)
+            boton = BotonRedondeado(text=texto)
             if texto.strip().lower() in ("cancelar", "cerrar", "entendido"):
                 boton.background_color = COLOR_NEUTRO
             boton.bind(on_release=accion)
@@ -525,7 +554,7 @@ class SmartExpiryApp(App):
             self.guardar_db()
 
         contenido.add_widget(self._fila_botones(
-            ("Girar imagen ⟳", girar),
+            ("Girar imagen", girar),
             ("Cancelar", lambda *_: cerrar())))
 
         popup = Popup(title="Escaneando", content=contenido,
@@ -713,16 +742,16 @@ class SmartExpiryApp(App):
         estado_mes = {"anio": base.year, "mes": base.month}
 
         contenido = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(10))
-        cabecera = BoxLayout(size_hint_y=None, height=dp(40))
-        btn_prev = Button(text="◀", size_hint_x=None, width=dp(44))
+        cabecera = BoxLayout(size_hint_y=None, height=dp(40), spacing=dp(6))
+        btn_prev = BotonRedondeado(text="< Mes", size_hint_x=None, width=dp(80))
         lbl_mes = Label(text="")
-        btn_next = Button(text="▶", size_hint_x=None, width=dp(44))
+        btn_next = BotonRedondeado(text="Mes >", size_hint_x=None, width=dp(80))
         cabecera.add_widget(btn_prev)
         cabecera.add_widget(lbl_mes)
         cabecera.add_widget(btn_next)
         contenido.add_widget(cabecera)
 
-        grilla = GridLayout(cols=7, size_hint_y=None, height=dp(260), spacing=dp(2))
+        grilla = GridLayout(cols=7, size_hint_y=None, height=dp(260), spacing=dp(3))
         contenido.add_widget(grilla)
 
         def pintar():
@@ -734,7 +763,8 @@ class SmartExpiryApp(App):
             for _ in range(primer_dia):
                 grilla.add_widget(Label(text="", size_hint_y=None, height=dp(34)))
             for dia in range(1, dias_en_mes + 1):
-                boton = Button(text=str(dia), size_hint_y=None, height=dp(34))
+                boton = BotonRedondeado(text=str(dia), size_hint_y=None, height=dp(34),
+                                       font_size="13sp")
 
                 def elegir(_, d=dia):
                     fecha_elegida = date(estado_mes["anio"], estado_mes["mes"], d).isoformat()
@@ -795,7 +825,7 @@ class SmartExpiryApp(App):
                                    height=dp(22), halign="left", text_size=(dp(300), None)))
         fila_fecha = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
         f_fecha = TextInput(text=por_defecto, multiline=False)
-        btn_calendario = Button(text="📅", size_hint_x=None, width=dp(56))
+        btn_calendario = BotonRedondeado(text="Fecha", size_hint_x=None, width=dp(80))
         fila_fecha.add_widget(f_fecha)
         fila_fecha.add_widget(btn_calendario)
         contenido.add_widget(fila_fecha)
