@@ -7,8 +7,8 @@ source.include_exts = py,png,jpg,kv,atlas,json,ttf,db
 version = 0.1
 android.numeric_version = 1
 
-# Se elimina libzbar y el fix rígido de python3
-requirements = python3,kivy==2.3.0,pillow,certifi
+# Se restaura pyzbar para la cámara y lectura de código de barras
+requirements = python3,kivy==2.3.0,pillow,pyzbar,certifi
 
 p4a.branch = v2024.01.21
 services = alertas:service.py:foreground
@@ -22,7 +22,7 @@ android.ndk = 25b
 android.archs = arm64-v8a, armeabi-v7a
 android.accept_sdk_license = True
 
-# Permisos requeridos para API 33
+# Permisos
 android.permissions = INTERNET,CAMERA,FOREGROUND_SERVICE,POST_NOTIFICATIONS
 
 [buildozer]
