@@ -8,6 +8,7 @@ version = 0.1
 android.numeric_version = 1
 requirements = python3==3.11.5,hostpython3==3.11.5,kivy==2.3.0,pillow,libzbar,pyzbar,certifi
 p4a.branch = v2024.01.21
+services = alertas:service.py:foreground
 orientation = portrait, landscape
 fullscreen = 0
 
@@ -17,7 +18,7 @@ android.minapi = 21
 android.ndk = 25b
 android.archs = arm64-v8a, armeabi-v7a
 android.accept_sdk_license = True
-android.permissions = INTERNET,CAMERA
+android.permissions = INTERNET,CAMERA,FOREGROUND_SERVICE,POST_NOTIFICATIONS
 
 [buildozer]
 log_level = 2
