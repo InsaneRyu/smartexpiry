@@ -47,6 +47,7 @@ COLOR_CAMPO = (0.18, 0.20, 0.24, 1)
 COLOR_ACENTO = (0.30, 0.48, 0.68, 1)
 COLOR_ACENTO_OSCURO = (0.20, 0.33, 0.48, 1)
 COLOR_NEUTRO = (0.27, 0.29, 0.33, 1)
+COLOR_PELIGRO = (0.75, 0.20, 0.19, 1)
 COLOR_TEXTO = (0.96, 0.97, 0.99, 1)
 COLOR_TEXTO_TENUE = (0.63, 0.67, 0.73, 1)
 COLOR_TARJETA_OK = (0.14, 0.30, 0.38, 1)
@@ -54,24 +55,19 @@ COLOR_TARJETA_WARN = (0.46, 0.35, 0.12, 1)
 COLOR_TARJETA_DANGER = (0.46, 0.20, 0.19, 1)
 
 Window.clearcolor = COLOR_FONDO
-Window.softinput_mode = "below_target"  # mantiene visible el campo donde escribes
+Window.softinput_mode = "below_target"  # Mantiene visible el campo donde escribes
 
-# En Android hay que pedir permiso de cámara en tiempo de ejecución.
+# Permisos en tiempo de ejecución para Android
 if platform == "android":
     from android.permissions import Permission, check_permission, request_permissions
 else:
     Permission = check_permission = request_permissions = None
 
-# Todo lo relacionado a cámara/escaneo se carga con cuidado: si algo falla
-# (muy común la primera vez en Android), la app sigue abriendo con el
-# registro manual disponible, en vez de cerrarse de golpe.
 CAMARA_DISPONIBLE = True
 _error_camara = ""
 
 try:
     if platform == "android":
-        # ctypes no siempre encuentra libzbar.so por sí solo en Android;
-        # la precargamos desde la carpeta de librerías nativas de la app.
         import ctypes
         from jnius import autoclass
         _actividad = autoclass("org.kivy.android.PythonActivity").mActivity
@@ -79,7 +75,7 @@ try:
         try:
             ctypes.CDLL(os.path.join(_carpeta_libs, "libzbar.so"))
         except OSError:
-            pass  # si esto falla, dejamos que pyzbar lo intente por su cuenta
+            pass
 
     from pyzbar.pyzbar import decode as zbar_decode
     from PIL import Image as PILImage
@@ -107,10 +103,13 @@ def _rotacion_pantalla_actual():
 DIAS_ALERTA = 7
 
 
-# ---------- Lógica (igual que la Fase 1) ----------
+# ---------- Lógica ----------
 
 def dias_para_vencer(fecha_texto):
-    return (date.fromisoformat(fecha_texto) - date.today()).days
+    try:
+        return (date.fromisoformat(fecha_texto) - date.today()).days
+    except (ValueError, TypeError):
+        return 0
 
 
 def estado(dias):
@@ -125,11 +124,13 @@ def estado(dias):
 def lotes_ordenados(db, filtro=""):
     filtro = filtro.lower().strip()
     resultado = []
-    for lote in db["inventario"]:
-        nombre = db["catalogo"].get(lote["codigo_upc"], {}).get("nombre", "")
-        if filtro in nombre.lower() or filtro in lote["codigo_upc"]:
+    for lote in db.get("inventario", []):
+        prod_info = db.get("catalogo", {}).get(lote.get("codigo_upc", "")) or {}
+        nombre = prod_info.get("nombre") or ""
+        codigo = lote.get("codigo_upc", "")
+        if filtro in nombre.lower() or filtro in codigo.lower():
             resultado.append(lote)
-    return sorted(resultado, key=lambda l: l["fecha_vencimiento"])
+    return sorted(resultado, key=lambda l: l.get("fecha_vencimiento", ""))
 
 
 # ---------- Diseño de la pantalla (lenguaje KV) ----------
@@ -145,6 +146,8 @@ KV = """
 #:import COLOR_TEXTO_TENUE __main__.COLOR_TEXTO_TENUE
 
 <Button>:
+    background_normal: ''
+    background_down: ''
     background_color: COLOR_ACENTO if self.state == 'normal' else COLOR_ACENTO_OSCURO
     color: COLOR_TEXTO
     on_release: Clock.schedule_once(lambda dt: setattr(self, 'state', 'normal'), 0)
@@ -288,7 +291,6 @@ FloatLayout:
 
 
 class FilaLote(Button):
-    """Una fila de la lista. Al tocarla se abre el menú de opciones (editar o dar de baja)."""
     id_lote = StringProperty("")
     color_estado = ListProperty(COLOR_TARJETA_OK)
 
@@ -297,14 +299,10 @@ class FilaLote(Button):
 
 
 class BotonFAB(Button):
-    """El botón circular flotante (+), con sombra suave."""
     pass
 
 
 class BotonRedondeado(Button):
-    """Botón con esquinas bien redondeadas, usado en diálogos y acciones.
-    background_color decide el color de relleno (se puede cambiar desde
-    Python, por ejemplo para los botones 'Cancelar')."""
     pass
 
 
@@ -323,9 +321,6 @@ class SmartExpiryApp(App):
         self._arrancar_servicio_de_fondo()
 
     def _arrancar_servicio_de_fondo(self):
-        """Inicia el servicio que manda alertas aunque la app esté cerrada.
-        Si algo falla (versión de Android, nombre del servicio, etc.), la
-        app sigue funcionando normal, solo que sin esta parte."""
         if platform != "android":
             return
         try:
@@ -337,25 +332,44 @@ class SmartExpiryApp(App):
         except Exception:
             pass
 
+    def _db_defecto(self):
+        return {
+            "catalogo": {},
+            "inventario": [],
+            "config": {
+                "rotacion_camara": 0,
+                "rotacion_pantalla_base": 0,
+                "whatsapp_telefono": "",
+                "whatsapp_apikey": "",
+                "whatsapp_ultima_alerta": ""
+            }
+        }
+
     def cargar_db(self):
         if not os.path.exists(self.archivo):
-            return {"catalogo": {}, "inventario": [],
-                    "config": {"rotacion_camara": 0, "rotacion_pantalla_base": 0,
-                              "whatsapp_telefono": "", "whatsapp_apikey": "",
-                              "whatsapp_ultima_alerta": ""}}
-        with open(self.archivo, "r", encoding="utf-8") as f:
-            datos = json.load(f)
+            return self._db_defecto()
+        try:
+            with open(self.archivo, "r", encoding="utf-8") as f:
+                datos = json.load(f)
+        except Exception:
+            return self._db_defecto()
+
         config = datos.setdefault("config", {})
         config.setdefault("rotacion_camara", 0)
         config.setdefault("rotacion_pantalla_base", 0)
         config.setdefault("whatsapp_telefono", "")
         config.setdefault("whatsapp_apikey", "")
         config.setdefault("whatsapp_ultima_alerta", "")
+        datos.setdefault("catalogo", {})
+        datos.setdefault("inventario", [])
         return datos
 
     def guardar_db(self):
-        with open(self.archivo, "w", encoding="utf-8") as f:
-            json.dump(self.db, f, ensure_ascii=False, indent=2)
+        try:
+            with open(self.archivo, "w", encoding="utf-8") as f:
+                json.dump(self.db, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Error guardando DB: {e}")
 
     # ----- Lista principal -----
 
@@ -364,24 +378,29 @@ class SmartExpiryApp(App):
         lotes = lotes_ordenados(self.db, ids.buscar.text)
         datos = []
         for lote in lotes:
-            producto = self.db["catalogo"].get(lote["codigo_upc"], {})
-            nombre = escape_markup(producto.get("nombre", "Sin nombre"))
-            unidad = producto.get("unidad", "")
-            detalle = f"UPC {lote['codigo_upc']}"
+            producto = self.db.get("catalogo", {}).get(lote.get("codigo_upc", "")) or {}
+            nombre_raw = producto.get("nombre") or "Sin nombre"
+            nombre = escape_markup(nombre_raw)
+            unidad_raw = producto.get("unidad") or ""
+            unidad = escape_markup(unidad_raw)
+
+            detalle = f"UPC {lote.get('codigo_upc', '')}"
             if unidad and unidad != "Unidad":
-                detalle = f"{detalle} · {escape_markup(unidad)}"
-            texto_estado, color = estado(dias_para_vencer(lote["fecha_vencimiento"]))
+                detalle = f"{detalle} · {unidad}"
+
+            dias = dias_para_vencer(lote.get("fecha_vencimiento", ""))
+            texto_estado, color = estado(dias)
             datos.append({
                 "text": (f"[b]{nombre}[/b] {detalle}\n"
-                         f"Cant: {lote['cantidad']} | Vence: {lote['fecha_vencimiento']} | {texto_estado}"),
+                         f"Cant: {lote.get('cantidad', 0)} | Vence: {lote.get('fecha_vencimiento', '')} | {texto_estado}"),
                 "color_estado": color,
-                "id_lote": lote["id_lote"],
+                "id_lote": lote.get("id_lote", ""),
             })
         ids.rv.data = datos
 
-        por_vencer = sum(1 for l in self.db["inventario"]
-                         if dias_para_vencer(l["fecha_vencimiento"]) <= DIAS_ALERTA)
-        ids.titulo.text = (f"SmartExpiry Pro | {len(self.db['inventario'])} lotes | "
+        por_vencer = sum(1 for l in self.db.get("inventario", [])
+                         if dias_para_vencer(l.get("fecha_vencimiento", "")) <= DIAS_ALERTA)
+        ids.titulo.text = (f"SmartExpiry Pro | {len(self.db.get('inventario', []))} lotes | "
                            f"{por_vencer} por vencer")
 
     # ----- Ayudas para armar diálogos -----
@@ -390,13 +409,14 @@ class SmartExpiryApp(App):
         fila = BoxLayout(size_hint_y=None, height=dp(52), spacing=dp(10))
         for texto, accion in pares:
             boton = BotonRedondeado(text=texto)
-            if texto.strip().lower() in ("cancelar", "cerrar", "entendido"):
+            t_lower = texto.strip().lower()
+            if t_lower in ("cancelar", "cerrar", "entendido"):
                 boton.background_color = COLOR_NEUTRO
-            elif texto.strip().lower() in ("eliminar lote",):
+            elif t_lower in ("eliminar lote", "dar de baja"):
                 boton.background_color = COLOR_PELIGRO
 
             def envoltura(instancia, accion=accion):
-                instancia.state = "normal"  # evita que quede "marcado" tras tocarlo
+                instancia.state = "normal"
                 accion(instancia)
 
             boton.bind(on_release=envoltura)
@@ -406,7 +426,7 @@ class SmartExpiryApp(App):
     def _campo(self, contenido, etiqueta, texto="", solo_numeros=False):
         contenido.add_widget(Label(text=etiqueta, size_hint_y=None, height=dp(24),
                                    halign="left", text_size=(dp(300), None)))
-        campo = TextInput(text=texto, multiline=False, size_hint_y=None, height=dp(46),
+        campo = TextInput(text=str(texto) if texto is not None else "", multiline=False, size_hint_y=None, height=dp(46),
                           input_filter="int" if solo_numeros else None)
         contenido.add_widget(campo)
         return campo
@@ -441,37 +461,31 @@ class SmartExpiryApp(App):
         popup.open()
 
     def _procesar_codigo(self, upc, modo):
-        """Con el UPC ya leído (por cámara o a mano), sigue el flujo del blueprint."""
         if modo == "filtro":
             self.root.ids.buscar.text = upc
             return
-        if upc in self.db["catalogo"]:
+        if upc in self.db.get("catalogo", {}):
             self.abrir_lote(upc, es_nuevo=False)
             return
-        # Producto nuevo: primero probamos Open Food Facts (Paso 3 del blueprint)
+
         self._mostrar_buscando()
 
         def al_terminar(nombre, cantidad_texto, error_texto):
             self._cerrar_buscando()
+            aviso = ""
             if error_texto:
-                self._mostrar_aviso(
-                    f"{self._mensaje_amigable_red(error_texto)}\n\n"
-                    "Completa los datos a mano; también puede que el producto "
-                    "simplemente no esté en la base de Open Food Facts.")
+                aviso = self._mensaje_amigable_red(error_texto)
+
             self.abrir_lote(upc, es_nuevo=True, prellenado={
                 "nombre": nombre or "",
                 "descripcion": cantidad_texto or "",
                 "encontrado": bool(nombre),
+                "aviso_error": aviso
             })
 
         self._consultar_openfoodfacts(upc, al_terminar)
 
     def _consultar_openfoodfacts(self, upc, on_listo, intento=1):
-        """Busca el producto en Open Food Facts en un hilo aparte para no
-        congelar la pantalla mientras responde. Si falla por algo que puede
-        ser pasajero (conexión lenta, corte momentáneo), reintenta una vez
-        sola antes de rendirse. error_texto queda vacío si la consulta se
-        hizo bien pero el producto simplemente no estaba en su base."""
         def tarea():
             nombre = None
             cantidad_texto = ""
@@ -488,7 +502,6 @@ class SmartExpiryApp(App):
                     nombre = (producto.get("product_name_es")
                               or producto.get("product_name") or None)
                     cantidad_texto = producto.get("quantity", "") or ""
-                # si status no es 1, el producto no está en su base: no es un error
             except Exception as e:
                 error_texto = f"{type(e).__name__}: {e}"
 
@@ -504,16 +517,15 @@ class SmartExpiryApp(App):
 
     @staticmethod
     def _mensaje_amigable_red(error_texto):
-        """Traduce el error técnico a algo que un usuario pueda entender."""
         minuscula = error_texto.lower()
         if "timed out" in minuscula or "timeout" in minuscula:
-            return "La conexión a internet está muy lenta o no respondió a tiempo."
+            return "La conexión está muy lenta."
         if ("gaierror" in minuscula or "name or service not known" in minuscula
                 or "network is unreachable" in minuscula or "nodename" in minuscula):
-            return "No hay conexión a internet en este momento."
+            return "Sin conexión a internet."
         if "certificate" in minuscula or "ssl" in minuscula:
-            return "Hubo un problema de seguridad al conectar (certificado)."
-        return "No se pudo conectar a internet."
+            return "Error de certificado SSL."
+        return "No se pudo consultar Open Food Facts."
 
     def _mostrar_buscando(self):
         contenido = BoxLayout(orientation="vertical", padding=dp(20))
@@ -528,12 +540,12 @@ class SmartExpiryApp(App):
             self._popup_buscando.dismiss()
             self._popup_buscando = None
 
-    # ----- Escritura manual (respaldo si la cámara falla o no hay una) -----
+    # ----- Escritura manual -----
 
     def abrir_manual(self, modo):
         contenido = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
         campo = self._campo(contenido, "Escribe el código UPC", solo_numeros=True)
-        contenido.add_widget(Label())  # espacio flexible
+        contenido.add_widget(Label())
 
         def aceptar(*_):
             upc = campo.text.strip()
@@ -550,21 +562,19 @@ class SmartExpiryApp(App):
         popup.open()
 
     def _angulo_camara_actual(self):
-        """Ángulo calibrado, ajustado automáticamente si la tablet
-        está en una posición distinta a cuando se calibró."""
-        config = self.db["config"]
+        config = self.db.get("config", {})
         pantalla_ahora = _rotacion_pantalla_actual()
-        diferencia = (pantalla_ahora - config["rotacion_pantalla_base"]) % 360
-        return (config["rotacion_camara"] + diferencia) % 360
+        diferencia = (pantalla_ahora - config.get("rotacion_pantalla_base", 0)) % 360
+        return (config.get("rotacion_camara", 0) + diferencia) % 360
 
-    # ----- Escaneo real con la cámara -----
+    # ----- Escaneo con la cámara -----
 
     def abrir_camara(self, modo):
         if not CAMARA_DISPONIBLE:
             self._mostrar_aviso(
-                "El escaneo con cámara no está disponible en esta compilación.\n"
-                "Usa 'Escribir a mano' mientras lo ajustamos.\n\n"
-                f"Detalle técnico: {_error_camara[:120]}")
+                "El escaneo con cámara no está disponible.\n"
+                "Usa 'Escribir a mano' por ahora.\n\n"
+                f"Detalle: {_error_camara[:120]}")
             return
 
         if platform == "android" and check_permission is not None:
@@ -596,7 +606,7 @@ class SmartExpiryApp(App):
         contenedor.add_widget(camara)
 
         envoltorio = BoxLayout(size_hint_y=None, height=dp(320))
-        envoltorio.add_widget(Widget())  # centra el visor
+        envoltorio.add_widget(Widget())
         envoltorio.add_widget(contenedor)
         envoltorio.add_widget(Widget())
         contenido.add_widget(envoltorio)
@@ -607,6 +617,7 @@ class SmartExpiryApp(App):
         def girar(*_):
             nueva = (contenedor.rotation + 90) % 360
             contenedor.rotation = nueva
+            contenedor.center = (dp(160), dp(160))
             self.db["config"]["rotacion_camara"] = nueva
             self.db["config"]["rotacion_pantalla_base"] = _rotacion_pantalla_actual()
             self.guardar_db()
@@ -619,28 +630,36 @@ class SmartExpiryApp(App):
                       size_hint=(0.95, None), height=dp(520), auto_dismiss=False)
 
         tarea = None
-        fotogramas_a_descartar = [6]  # ignora los primeros, pueden venir de la sesión anterior
-        analizando = [False]  # evita acumular análisis si uno tarda más de 0.3s
+        fotogramas_a_descartar = [6]
+        analizando = [False]
+        activo = [True]
 
         def intentar_leer(dt):
+            if not activo[0]:
+                return
             if fotogramas_a_descartar[0] > 0:
                 fotogramas_a_descartar[0] -= 1
                 if fotogramas_a_descartar[0] == 0:
                     estado_txt.text = "Apunta al código de barras..."
                 return
             if analizando[0]:
-                return  # el fotograma anterior todavía se está analizando
+                return
             textura = camara.texture
             if textura is None:
                 return
             ancho, alto = textura.size
             datos = textura.pixels
+            fmt_str = (textura.colorfmt or "RGBA").upper()
             analizando[0] = True
 
             def analizar_en_segundo_plano():
                 codigo = None
                 try:
-                    imagen = PILImage.frombytes("RGBA", (ancho, alto), datos).convert("L")
+                    if fmt_str in ("RGBA", "RGB", "BGRA", "BGR"):
+                        imagen = PILImage.frombytes(fmt_str, (ancho, alto), datos).convert("L")
+                    else:
+                        imagen = PILImage.frombytes("RGBA", (ancho, alto), datos).convert("L")
+
                     resultados = zbar_decode(imagen)
                     if resultados:
                         codigo = resultados[0].data.decode("utf-8", errors="ignore").strip()
@@ -649,7 +668,7 @@ class SmartExpiryApp(App):
 
                 def terminar(dt2):
                     analizando[0] = False
-                    if codigo:
+                    if codigo and activo[0]:
                         cerrar()
                         self._procesar_codigo(codigo, modo)
                 Clock.schedule_once(terminar, 0)
@@ -657,10 +676,12 @@ class SmartExpiryApp(App):
             threading.Thread(target=analizar_en_segundo_plano, daemon=True).start()
 
         def cerrar(*_):
+            activo[0] = False
             if tarea:
                 tarea.cancel()
             camara.play = False
-            contenedor.remove_widget(camara)
+            if camara in contenedor.children:
+                contenedor.remove_widget(camara)
             popup.dismiss()
 
         tarea = Clock.schedule_interval(intentar_leer, 0.3)
@@ -678,10 +699,8 @@ class SmartExpiryApp(App):
     # ----- Alertas por WhatsApp (CallMeBot) -----
 
     def _enviar_whatsapp(self, mensaje, al_terminar=None):
-        """Manda un mensaje por WhatsApp usando CallMeBot, en un hilo aparte.
-        No hace nada si todavía no se configuró teléfono/API Key."""
-        telefono = self.db["config"].get("whatsapp_telefono", "").strip()
-        apikey = self.db["config"].get("whatsapp_apikey", "").strip()
+        telefono = self.db.get("config", {}).get("whatsapp_telefono", "").strip()
+        apikey = self.db.get("config", {}).get("whatsapp_apikey", "").strip()
         if not telefono or not apikey:
             if al_terminar:
                 Clock.schedule_once(
@@ -706,29 +725,28 @@ class SmartExpiryApp(App):
         threading.Thread(target=tarea, daemon=True).start()
 
     def _revisar_alerta_diaria(self, forzado=False):
-        """Revisa productos por vencer y manda UN mensaje resumen por
-        WhatsApp. Sin forzado, como máximo una vez por día."""
         hoy = date.today().isoformat()
-        if not forzado and self.db["config"].get("whatsapp_ultima_alerta") == hoy:
+        if not forzado and self.db.get("config", {}).get("whatsapp_ultima_alerta") == hoy:
             return
-        if not self.db["config"].get("whatsapp_telefono") or \
-           not self.db["config"].get("whatsapp_apikey"):
-            return  # aún no configurado; no molestamos con avisos
+        if not self.db.get("config", {}).get("whatsapp_telefono") or \
+           not self.db.get("config", {}).get("whatsapp_apikey"):
+            return
 
-        urgentes = [l for l in self.db["inventario"]
-                    if dias_para_vencer(l["fecha_vencimiento"]) <= DIAS_ALERTA]
+        urgentes = [l for l in self.db.get("inventario", [])
+                    if dias_para_vencer(l.get("fecha_vencimiento", "")) <= DIAS_ALERTA]
         if not urgentes:
             if forzado:
                 self._mostrar_aviso("No hay productos por vencer ahora mismo.")
             return
 
-        urgentes.sort(key=lambda l: l["fecha_vencimiento"])
+        urgentes.sort(key=lambda l: l.get("fecha_vencimiento", ""))
         lineas = []
         for lote in urgentes:
-            nombre = self.db["catalogo"].get(lote["codigo_upc"], {}).get("nombre", "Producto")
-            dias = dias_para_vencer(lote["fecha_vencimiento"])
+            prod = self.db.get("catalogo", {}).get(lote.get("codigo_upc", "")) or {}
+            nombre = prod.get("nombre") or "Producto"
+            dias = dias_para_vencer(lote.get("fecha_vencimiento", ""))
             texto_estado = "VENCIDO" if dias < 0 else f"vence en {dias}d"
-            lineas.append(f"- {nombre}: {lote['cantidad']} u. ({texto_estado})")
+            lineas.append(f"- {nombre}: {lote.get('cantidad', 1)} u. ({texto_estado})")
         mensaje = "SmartExpiry Pro - Productos por revisar:\n" + "\n".join(lineas)
 
         def al_terminar(ok, error_texto):
@@ -751,9 +769,9 @@ class SmartExpiryApp(App):
             size_hint_y=None, height=dp(26), bold=True))
 
         f_tel = self._campo(contenido, "Tu número con código de país (ej. +50688887777)",
-                            self.db["config"].get("whatsapp_telefono", ""))
+                            self.db.get("config", {}).get("whatsapp_telefono", ""))
         f_key = self._campo(contenido, "Tu API Key de CallMeBot",
-                            self.db["config"].get("whatsapp_apikey", ""))
+                            self.db.get("config", {}).get("whatsapp_apikey", ""))
 
         instrucciones = Label(
             text="Para conseguir tu API Key (una sola vez):\n"
@@ -818,8 +836,6 @@ class SmartExpiryApp(App):
             base = date.today()
         estado_mes = {"anio": base.year, "mes": base.month}
 
-        # padding superior extra para que los botones no choquen con la
-        # línea divisoria que el Popup dibuja debajo de su título
         contenido = BoxLayout(orientation="vertical", spacing=dp(8),
                               padding=[dp(10), dp(18), dp(10), dp(10)])
 
@@ -898,7 +914,7 @@ class SmartExpiryApp(App):
                       size_hint=(0.92, None), height=dp(500), auto_dismiss=False)
         popup.open()
 
-    # ----- Registrar lote (Pasos 4 y 5 del blueprint) -----
+    # ----- Registrar lote -----
 
     def abrir_lote(self, upc, es_nuevo, prellenado=None):
         prellenado = prellenado or {}
@@ -908,6 +924,11 @@ class SmartExpiryApp(App):
                 contenido.add_widget(Label(
                     text="Encontrado en Open Food Facts. Revisa y ajusta si hace falta.",
                     size_hint_y=None, height=dp(30), color=(0.35, 0.75, 0.45, 1)))
+            elif prellenado.get("aviso_error"):
+                contenido.add_widget(Label(
+                    text=f"{prellenado['aviso_error']}\nCompleta los datos a mano.",
+                    size_hint_y=None, height=dp(36), color=(1, 0.5, 0.45, 1)))
+
             f_nombre = self._campo(contenido, "Nombre del producto", prellenado.get("nombre", ""))
             f_upc_campo = self._campo(contenido, "UPC", upc)
             f_upc_campo.readonly = True
@@ -919,7 +940,8 @@ class SmartExpiryApp(App):
             f_unidad.bind(text=lambda inst, val: setattr(inst, "state", "normal"))
             contenido.add_widget(f_unidad)
         else:
-            nombre = self.db["catalogo"][upc]["nombre"]
+            prod = self.db.get("catalogo", {}).get(upc, {})
+            nombre = prod.get("nombre") or "Sin nombre"
             contenido.add_widget(Label(text=f"{nombre}\nUPC {upc}", size_hint_y=None,
                                        height=dp(50)))
 
@@ -951,12 +973,12 @@ class SmartExpiryApp(App):
                 msg.text = "La cantidad debe ser 1 o más."
                 return
             if es_nuevo:
-                self.db["catalogo"][upc] = {
+                self.db.setdefault("catalogo", {})[upc] = {
                     "nombre": f_nombre.text.strip() or "Sin nombre",
                     "descripcion": prellenado.get("descripcion", ""),
                     "unidad": f_unidad.text,
                 }
-            self.db["inventario"].append({
+            self.db.setdefault("inventario", []).append({
                 "id_lote": str(int(time.time() * 1000)),
                 "codigo_upc": upc,
                 "fecha_vencimiento": fecha,
@@ -970,24 +992,23 @@ class SmartExpiryApp(App):
         contenido.add_widget(self._fila_botones(
             ("Cancelar", lambda *_: popup.dismiss()),
             ("Guardar lote", guardar)))
-        alto = dp(610) if es_nuevo else dp(410)
+        alto = dp(630) if es_nuevo else dp(410)
         popup = Popup(title="Producto nuevo" if es_nuevo else "Registrar lote",
                       content=contenido, size_hint=(0.92, None), height=alto,
                       auto_dismiss=False)
         popup.open()
 
-    # ----- Consumo o baja (al tocar una fila) -----
+    # ----- Consumo o baja -----
 
     def abrir_detalle(self, id_lote):
-        """Menú que aparece al tocar una fila: editar el producto o darlo de baja."""
-        lote = next((l for l in self.db["inventario"] if l["id_lote"] == id_lote), None)
+        lote = next((l for l in self.db.get("inventario", []) if l.get("id_lote") == id_lote), None)
         if lote is None:
             return
-        producto = self.db["catalogo"].get(lote["codigo_upc"], {})
-        nombre = producto.get("nombre", "Sin nombre")
+        producto = self.db.get("catalogo", {}).get(lote.get("codigo_upc", ""), {})
+        nombre = producto.get("nombre") or "Sin nombre"
 
         contenido = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
-        contenido.add_widget(Label(text=f"{nombre}\nUPC {lote['codigo_upc']}",
+        contenido.add_widget(Label(text=f"{nombre}\nUPC {lote.get('codigo_upc', '')}",
                                    size_hint_y=None, height=dp(54)))
 
         def ir_a_editar(*_):
@@ -1008,13 +1029,11 @@ class SmartExpiryApp(App):
         popup.open()
 
     def abrir_editar_producto(self, id_lote):
-        """Permite modificar nombre, presentación, unidad, fecha y cantidad
-        de un producto ya registrado, en cualquier momento."""
-        lote = next((l for l in self.db["inventario"] if l["id_lote"] == id_lote), None)
+        lote = next((l for l in self.db.get("inventario", []) if l.get("id_lote") == id_lote), None)
         if lote is None:
             return
-        upc = lote["codigo_upc"]
-        producto = self.db["catalogo"].get(upc, {})
+        upc = lote.get("codigo_upc", "")
+        producto = self.db.get("catalogo", {}).get(upc, {})
 
         contenido = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(10))
         f_nombre = self._campo(contenido, "Nombre del producto", producto.get("nombre", ""))
@@ -1024,8 +1043,9 @@ class SmartExpiryApp(App):
 
         contenido.add_widget(Label(text="Tipo de unidad", size_hint_y=None, height=dp(22),
                                    halign="left", text_size=(dp(300), None)))
-        f_unidad = Spinner(text=producto.get("unidad", UNIDADES[0]), values=UNIDADES,
-                           size_hint_y=None, height=dp(46))
+        unidad_actual = producto.get("unidad") or UNIDADES[0]
+        f_unidad = Spinner(text=unidad_actual if unidad_actual in UNIDADES else UNIDADES[0],
+                           values=UNIDADES, size_hint_y=None, height=dp(46))
         f_unidad.bind(text=lambda inst, val: setattr(inst, "state", "normal"))
         contenido.add_widget(f_unidad)
 
@@ -1033,7 +1053,7 @@ class SmartExpiryApp(App):
                                    size_hint_y=None, height=dp(22), halign="left",
                                    text_size=(dp(300), None)))
         fila_fecha = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
-        f_fecha = TextInput(text=lote["fecha_vencimiento"], multiline=False)
+        f_fecha = TextInput(text=lote.get("fecha_vencimiento", ""), multiline=False)
         btn_calendario = BotonRedondeado(text="Fecha", size_hint_x=None, width=dp(80))
         fila_fecha.add_widget(f_fecha)
         fila_fecha.add_widget(btn_calendario)
@@ -1045,7 +1065,7 @@ class SmartExpiryApp(App):
         btn_calendario.bind(on_release=abrir_cal)
 
         f_cant = self._campo(contenido, "Cantidad de este lote",
-                             str(lote["cantidad"]), solo_numeros=True)
+                             str(lote.get("cantidad", 1)), solo_numeros=True)
         msg = self._mensaje(contenido)
 
         def guardar(*_):
@@ -1057,7 +1077,7 @@ class SmartExpiryApp(App):
             if not f_cant.text.strip().isdigit() or int(f_cant.text) < 1:
                 msg.text = "La cantidad debe ser 1 o más."
                 return
-            self.db["catalogo"][upc] = {
+            self.db.setdefault("catalogo", {})[upc] = {
                 "nombre": f_nombre.text.strip() or "Sin nombre",
                 "descripcion": producto.get("descripcion", ""),
                 "unidad": f_unidad.text,
@@ -1076,12 +1096,14 @@ class SmartExpiryApp(App):
         popup.open()
 
     def abrir_baja(self, id_lote):
-        lote = next((l for l in self.db["inventario"] if l["id_lote"] == id_lote), None)
+        lote = next((l for l in self.db.get("inventario", []) if l.get("id_lote") == id_lote), None)
         if lote is None:
             return
-        nombre = self.db["catalogo"].get(lote["codigo_upc"], {}).get("nombre", "Sin nombre")
+        nombre = self.db.get("catalogo", {}).get(lote.get("codigo_upc", ""), {}).get("nombre") or "Sin nombre"
+        cant_actual = lote.get("cantidad", 1)
+
         contenido = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(10))
-        contenido.add_widget(Label(text=f"{nombre}\nHay {lote['cantidad']} unidades",
+        contenido.add_widget(Label(text=f"{nombre}\nHay {cant_actual} unidades",
                                    size_hint_y=None, height=dp(50)))
         f_cuanto = self._campo(contenido, "Unidades que salen", "1", solo_numeros=True)
         msg = self._mensaje(contenido)
@@ -1091,8 +1113,8 @@ class SmartExpiryApp(App):
                 msg.text = "Escribe 1 o más unidades."
                 return
             cuanto = int(f_cuanto.text)
-            if cuanto >= lote["cantidad"]:
-                self.db["inventario"].remove(lote)   # lote agotado
+            if cuanto >= cant_actual:
+                self.db["inventario"].remove(lote)
             else:
                 lote["cantidad"] -= cuanto
             self.guardar_db()
@@ -1107,4 +1129,5 @@ class SmartExpiryApp(App):
         popup.open()
 
 
-SmartExpiryApp().run()
+if __name__ == "__main__":
+    SmartExpiryApp().run()
