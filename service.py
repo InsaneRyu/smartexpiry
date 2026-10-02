@@ -1,8 +1,5 @@
 """
 Servicio en segundo plano de SmartExpiry Pro.
-
-Corre de forma independiente a la pantalla principal. Revisa el inventario
-una vez al día y genera las alertas de vencimiento.
 """
 import json
 import os
@@ -10,7 +7,6 @@ import ssl
 import time
 from datetime import date
 
-# Importación segura de PyJNiUS para interactuar con Android
 try:
     from jnius import autoclass
     ANDROID_AVAILABLE = True
@@ -24,12 +20,11 @@ except Exception:
     _CONTEXTO_SSL = ssl.create_default_context()
 
 DIAS_ALERTA = 7
-SEGUNDOS_ENTRE_REVISIONES = 3600  # Revisa cada hora si cambió el día
+SEGUNDOS_ENTRE_REVISIONES = 3600
 
 
 def iniciar_notificacion_foreground():
-    """Registra la notificación permanente en la barra de estado de Android
-    obligatoria para los Foreground Services en Android 8.0+ (API 26 a 33+)."""
+    """Registra la notificación permanente para evitar que Android API 33 mate el proceso."""
     if not ANDROID_AVAILABLE:
         return
 
@@ -48,27 +43,22 @@ def iniciar_notificacion_foreground():
 
         notification_service = service.getSystemService(Context.NOTIFICATION_SERVICE)
 
-        # Crear canal de notificación para Android 8.0+
         importance = NotificationManager.IMPORTANCE_LOW
         channel = NotificationChannel(channel_id, channel_name, importance)
         notification_service.createNotificationChannel(channel)
 
-        # Construir la notificación
         builder = NotificationBuilder(service, channel_id)
         builder.setContentTitle(String('SmartExpiry Pro'))
         builder.setContentText(String('Monitoreo de vencimientos activo'))
         builder.setSmallIcon(service.getApplicationInfo().icon)
 
         notification = builder.build()
-
-        # ID único para el servicio en primer plano (no debe ser 0)
         service.startForeground(1001, notification)
     except Exception as e:
-        print(f"[SmartExpiry Service] Error al iniciar startForeground: {e}")
+        print(f"[SmartExpiry Service] Error startForeground: {e}")
 
 
 def _ruta_base_de_datos():
-    """Obtiene la ruta privada de almacenamiento interna de la app."""
     private_dir = os.environ.get("ANDROID_PRIVATE_DIR")
     if private_dir:
         return os.path.join(private_dir, "smart_expiry_db.json")
@@ -81,7 +71,6 @@ def _ruta_base_de_datos():
 
 
 def dias_para_vencer(fecha_texto):
-    """Calcula días faltantes evitando cierres si la fecha está mal escrita."""
     try:
         return (date.fromisoformat(str(fecha_texto).strip()) - date.today()).days
     except Exception:
@@ -99,7 +88,6 @@ def cargar_db(ruta):
 
 
 def revisar_inventario_y_notificar(ruta_db):
-    """Lógica de revisión de productos próximos a vencer."""
     db = cargar_db(ruta_db)
     if not db:
         return
@@ -112,25 +100,19 @@ def revisar_inventario_y_notificar(ruta_db):
         if fecha_exp:
             dias = dias_para_vencer(fecha_exp)
             if 0 <= dias <= DIAS_ALERTA:
-                por_vencer.append((item.get("nombre", "Producto sin nombre"), dias))
+                por_vencer.append((item.get("nombre", "Producto"), dias))
 
     if por_vencer:
-        print(f"[SmartExpiry Service] Alerta: {len(por_vencer)} productos por vencer.")
-        # Aquí ejecutas tu lógica de envío (p. ej., llamada API de WhatsApp o notificación local)
+        print(f"[SmartExpiry Service] Se encontraron {len(por_vencer)} productos por vencer.")
 
 
 if __name__ == "__main__":
-    # 1. Iniciar inmediatamente la notificación obligatoria
     iniciar_notificacion_foreground()
-
     ruta_db = _ruta_base_de_datos()
     ultima_fecha_revision = None
 
-    # 2. Bucle infinito para mantener el servicio activo
     while True:
         hoy = date.today()
-
-        # Solo ejecuta la revisión una vez por día
         if ultima_fecha_revision != hoy:
             revisar_inventario_y_notificar(ruta_db)
             ultima_fecha_revision = hoy
