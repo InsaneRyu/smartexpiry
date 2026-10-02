@@ -23,20 +23,21 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Instalar dependencias del sistema
+      - name: Instalar dependencias del sistema y ZBar
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             git zip unzip autoconf libtool pkg-config zlib1g-dev \
             libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev \
-            libssl-dev gettext build-essential lld ccache libgmp-dev libmpfr-dev
+            libssl-dev gettext build-essential lld ccache libgmp-dev libmpfr-dev \
+            libzbar0 libzbar-dev
 
       - name: Instalar Cython y Buildozer
         run: |
           python -m pip install --upgrade pip
           pip install "cython<3" buildozer
 
-      - name: Mantener la misma llave de firma entre compilaciones (respaldo)
+      - name: Mantener la misma llave de firma entre compilaciones
         uses: actions/cache@v4
         with:
           path: ~/.android/debug.keystore
