@@ -26,12 +26,15 @@ jobs:
       - name: Instalar dependencias del sistema
         run: |
           sudo apt-get update
-          sudo apt-get install -y git zip unzip autoconf libtool pkg-config zlib1g-dev libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev libssl-dev gettext
+          sudo apt-get install -y \
+            git zip unzip autoconf libtool pkg-config zlib1g-dev \
+            libncurses5-dev libncursesw5-dev libtinfo5 cmake libffi-dev \
+            libssl-dev gettext build-essential lld ccache libgmp-dev libmpfr-dev
 
-      - name: Instalar Buildozer
+      - name: Instalar Cython y Buildozer
         run: |
           python -m pip install --upgrade pip
-          pip install buildozer
+          pip install "cython<3" buildozer
 
       - name: Mantener la misma llave de firma entre compilaciones (respaldo)
         uses: actions/cache@v4
@@ -52,25 +55,22 @@ jobs:
               -storepass android -alias androiddebugkey -keypass android \
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
-            echo "Llave nueva creada. Descárgala del Artifact 'llave-de-firma-guardar'"
-            echo "y súbela al repositorio como 'debug.keystore' para fijarla para siempre."
+            echo "Llave nueva creada."
           fi
 
-      - name: Guardar la llave como Artifact (solo hace falta la primera vez)
+      - name: Guardar la llave como Artifact (solo la primera vez)
         uses: actions/upload-artifact@v4
         with:
           name: llave-de-firma-guardar
           path: ~/.android/debug.keystore
 
-      - name: Reutilizar el Android SDK/NDK y lo ya compilado antes
+      - name: Reutilizar descarga de Android SDK / NDK
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.buildozer
-            .buildozer
-          key: buildozer-${{ hashFiles('buildozer.spec') }}
+          path: ~/.buildozer
+          key: buildozer-global-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-
+            buildozer-global-
 
       - name: Dar a esta compilación un número de versión único
         run: |
@@ -78,8 +78,6 @@ jobs:
 
       - name: Compilar APK
         run: buildozer -v android debug
-        env:
-          JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
 
       - name: Guardar el APK
         uses: actions/upload-artifact@v4
